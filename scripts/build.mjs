@@ -24,4 +24,6 @@ await build({
   minify: false,
   logLevel: "info"
 });
+// Electron 仍加载根目录 index.html，避免升级时改变 localStorage 的 file URL。
+cpSync(join(dist, "app.js"), join(root, "app.js"));
 console.log("Web bundle ready: dist/index.html");
