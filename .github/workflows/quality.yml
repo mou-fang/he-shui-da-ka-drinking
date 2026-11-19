@@ -1,0 +1,46 @@
+name: Quality Gate
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+permissions:
+  contents: read
+jobs:
+  web-and-unit:
+    runs-on: ubuntu-24.04
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --no-package-lock
+      - name: Generate dependency lockfile for reproducible builds
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Upload dependency lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-npm-lockfile
+          path: package-lock.json
+          if-no-files-found: error
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=moderate
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install chromium
+      - run: npm run test:e2e
+      - name: Preserve failed browser traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-failures
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore

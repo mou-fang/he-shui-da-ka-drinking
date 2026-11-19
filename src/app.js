@@ -1,59 +1,90 @@
 import { eggForDate, HIDDEN_EGGS } from "./eggs.js";
+import {
+  KEY, clamp, freshState, normalizeState, todayStr, addDays, clockStr, bounded,
+  slotTimes as slotsFor, dayData as readDay, dayTotal as readTotal,
+  dayDrinks as readDrinks, nextOpenSlot as findOpen, dayGoal as readGoal, isLosslessRecordState, ensureDay
+} from "./core.js";
+import { syncReminders, reminderDescription, reminderPlatform } from "./reminders.js";
+import { exportBackup } from "./backup.js";
+import { advanceWave } from "./wave.js";
 
-// ---------- 存储：localStorage only，初始为空（无演示数据、无真实数据） ----------
-const KEY = "hsdq-v1";
 const PRESETS = [100, 150, 200, 250, 300, 400, 500, 750, 1000];
-const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-const $ = (id) => document.getElementById(id);
-
-function todayStr(d = new Date()) {
-  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), dd = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${dd}`;
-}
-function addDays(str, n) {
-  const [y, m, d] = str.split("-").map(Number);
-  return todayStr(new Date(y, m - 1, d + n));
-}
+const $ = id => document.getElementById(id);
+let startupWarning = "";
+let loadError = false;
+let rawRecovery = "";
+let lastPersistedRaw = null;
 function load() {
+  loadError = false;
+  rawRecovery = "";
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) { const s = JSON.parse(raw); if (s && s.settings && s.days) return s; }
-  } catch { /* 损坏则重建 */ }
-  return { settings: { goal: 2000, defaultAmount: 250, startHour: 8, intervalHours: 2, removedSlots: [] },
-           days: {}, celebrated: {} };
+    lastPersistedRaw = raw;
+    if (!raw) return freshState();
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) ||
+        !parsed.settings || typeof parsed.settings !== "object" || Array.isArray(parsed.settings) ||
+        !parsed.days || typeof parsed.days !== "object" || Array.isArray(parsed.days) ||
+        !isLosslessRecordState(parsed)) {
+      throw new Error("Invalid data structure");
+    }
+    return normalizeState(parsed);
+  } catch {
+    loadError = true;
+    try { rawRecovery = localStorage.getItem(KEY) || ""; } catch { /* 浏览器可能拒绝存储访问 */ }
+    startupWarning = "本地记录读取异常，已暂停数据修改。请先导出原始恢复文件，再导入有效备份。";
+    return freshState();
+  }
 }
 let state = load();
-function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { /* 容量满时静默失败 */ } }
-
-let viewDate = todayStr();          // 正在看的日期（默认今天）
+let viewDate = todayStr();
+let lastToday = viewDate;
 let selected = state.settings.defaultAmount;
-let displayedTotal = 0;             // 屏幕上滚动显示的数字
-let userTouchedAmount = false;      // 入场滑块动画是否被用户打断
-
-// ---------- 日期 / 时段 ----------
-function slotTimes() {
-  const { startHour, intervalHours, removedSlots } = state.settings;
-  const out = [];
-  for (let h = startHour; h <= 20; h += intervalHours) {
-    const t = String(h).padStart(2, "0") + ":00";
-    if (!removedSlots.includes(t)) out.push(t);
-  }
-  return out.length ? out : ["08:00"];
-}
-function dayData(date) { return state.days[date] || { slots: {}, bonus: [] }; }
-function ensureDay(date) { if (!state.days[date]) state.days[date] = { slots: {}, bonus: [] }; return state.days[date]; }
-function dayTotal(date) {
-  const d = dayData(date);
-  return Object.values(d.slots).reduce((a, b) => a + b, 0) + d.bonus.reduce((a, b) => a + b.ml, 0);
-}
-function dayDrinks(date) { // 每杯记录：{ time: "HH:MM", ml }，按时间排
-  const d = dayData(date);
-  const list = Object.entries(d.slots).map(([time, ml]) => ({ time, ml, kind: "slot" }));
-  for (const b of d.bonus) list.push({ time: b.time, ml: b.ml, kind: "bonus" });
-  return list.sort((a, b) => a.time.localeCompare(b.time));
-}
+let displayedTotal = 0;
+let userTouchedAmount = false;
+function slotTimes() { return slotsFor(state.settings); }
+function dayData(date) { return readDay(state, date); }
+function dayTotal(date) { return readTotal(state, date); }
+function dayGoal(date) { return readGoal(state, date); }
+function dayDrinks(date) { return readDrinks(state, date); }
 function isToday() { return viewDate === todayStr(); }
-function goalReached(date) { return dayTotal(date) >= state.settings.goal; }
+
+// 先持久化候选状态，成功后才改变内存状态；配额满也不会假装打卡成功。
+function commit(change) {
+  if (loadError) { toast("原始数据异常，为防丢失已禁止覆盖。请先导出原始恢复文件。"); return false; }
+  try {
+    // 防止网页多标签页用过期状态直接覆盖另一标签页更新的记录。
+    // 这降低丢失风险，但 localStorage 没有跨进程原子 compare-and-swap。
+    if (localStorage.getItem(KEY) !== lastPersistedRaw) {
+      state = load();
+      showNumber(dayTotal(viewDate));
+      renderAll();
+      toast("另一窗口已修改记录，已同步最新内容，请重试");
+      return false;
+    }
+    const next = JSON.parse(JSON.stringify(state));
+    change(next);
+    const serialized = JSON.stringify(next);
+    localStorage.setItem(KEY, serialized);
+    if (localStorage.getItem(KEY) !== serialized) throw new Error("Storage write verification failed");
+    lastPersistedRaw = serialized;
+    state = next;
+    return true;
+  } catch (error) {
+    toast("保存失败：请检查设备存储空间或隐私模式");
+    console.error("喝水记录保存失败", error);
+    return false;
+  }
+}
+function syncDate() {
+  const now = todayStr();
+  if (now === lastToday) return;
+  const wasCurrent = viewDate === lastToday;
+  lastToday = now;
+  if (wasCurrent) switchDate(now); else renderAll();
+  if (state.settings.remindersEnabled) void syncReminders(state.settings);
+}
+
 
 // ---------- 小工具 ----------
 let toastTimer = null;
@@ -62,17 +93,34 @@ function toast(msg) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove("show"), 2200);
 }
 
-// 数字逐位滚动：先快后慢，最多 2 秒，与水位上升同步。
-function animateNumber(from, to, dur = 1400) {
-  const start = performance.now(); const el = $("totalNum");
-  function frame(now) {
-    const p = clamp((now - start) / dur, 0, 1);
-    const eased = 1 - Math.pow(1 - p, 3); // 先快后慢
-    el.textContent = Math.round(from + (to - from) * eased);
-    if (p < 1) requestAnimationFrame(frame);
-  }
-  requestAnimationFrame(frame);
+// 动画在切日期、连续点击时取消旧帧，避免旧数字覆盖新状态。
+let numberFrame = 0;
+let numberAnimating = false;
+function showNumber(value) {
+  cancelAnimationFrame(numberFrame);
+  numberAnimating = false;
+  displayedTotal = value;
+  $("totalNum").textContent = String(value);
 }
+function animateNumber(to) {
+  const startValue = Number($("totalNum").textContent) || 0;
+  cancelAnimationFrame(numberFrame);
+  displayedTotal = to;
+  if (document.hidden || matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    showNumber(to); return;
+  }
+  numberAnimating = true;
+  const start = performance.now();
+  const duration = Math.min(1800, 300 + Math.abs(to - startValue) * 1.3);
+  function frame(now) {
+    const p = clamp((now - start) / duration, 0, 1);
+    $("totalNum").textContent = String(Math.round(startValue + (to - startValue) * (1 - Math.pow(1 - p, 3))));
+    if (p < 1) numberFrame = requestAnimationFrame(frame);
+    else { numberAnimating = false; $("totalNum").textContent = String(to); }
+  }
+  numberFrame = requestAnimationFrame(frame);
+}
+
 
 // ---------- 选水量：预设滑块 + 直接输入 + ±50 步进 ----------
 // 入场：滑块先从一个随机的非 250 选项滑到 250，~120ms 内开始；用户一点就取消。
@@ -97,20 +145,37 @@ function positionPill(animate = true) {
   presetBtns.forEach(b => b.classList.toggle("sel", +b.dataset.v === selected));
 }
 function setAmount(v, fromUser = false) {
-  selected = clamp(Math.round(v / 10) * 10, 10, 2000);
+  selected = bounded(v, selected, 10, 2000, 10);
   $("amountNum").textContent = selected;
   $("amountInput").value = selected;
   positionPill(true);
-  if (fromUser) userTouchedAmount = true;
+  if (fromUser) {
+    userTouchedAmount = true;
+    scrollPresetIntoView(presetBtns.find(b => +b.dataset.v === selected));
+  }
 }
+function scrollPresetIntoView(button) {
+  if (!button) return;
+  const left = button.offsetLeft - (track.clientWidth - button.offsetWidth) / 2;
+  const max = Math.max(0, track.scrollWidth - track.clientWidth);
+  const target = clamp(left, 0, max);
+  track.scrollTo({ left: target, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+}
+// 入场只移动装饰性 pill，不能改真实 selected 或输入框，避免第一次输入跳值。
 function introSlider() {
-  const others = PRESETS.filter(v => v !== state.settings.defaultAmount);
-  const start = others[Math.floor(Math.random() * others.length)];
-  selected = start; $("amountNum").textContent = start; $("amountInput").value = start;
-  positionPill(false);
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const visible = presetBtns.filter(btn => btn.offsetLeft + btn.offsetWidth <= track.clientWidth);
+  const candidates = visible.filter(btn => Number(btn.dataset.v) !== selected);
+  const destination = presetBtns.find(btn => Number(btn.dataset.v) === selected);
+  if (!candidates.length || !destination) return;
+  const start = candidates[Math.floor(Math.random() * candidates.length)];
+  pill.style.transition = "none";
+  pill.style.left = start.offsetLeft + "px";
+  pill.style.width = start.offsetWidth + "px";
+  presetBtns.forEach(btn => btn.classList.toggle("sel", btn === start));
   setTimeout(() => {
-    if (userTouchedAmount) return;
-    setAmount(state.settings.defaultAmount);
+    if (userTouchedAmount) { positionPill(false); return; }
+    requestAnimationFrame(() => { if (!userTouchedAmount) positionPill(true); });
   }, 120);
 }
 // 长按连续增减
@@ -125,69 +190,96 @@ $("minusBtn").addEventListener("click", () => {});
 $("plusBtn").addEventListener("click", () => {});
 holdable($("minusBtn"), () => setAmount(selected - 50, true));
 holdable($("plusBtn"), () => setAmount(selected + 50, true));
-$("amountInput").addEventListener("change", () => setAmount(+$("amountInput").value || 250, true));
+for (const [id, delta] of [["minusBtn", -50], ["plusBtn", 50]]) {
+  $(id).addEventListener("click", e => { if (e.detail === 0) setAmount(selected + delta, true); });
+}
+// input 即时更新选择并阻止入场动画覆盖；change/blur 时才规范输入框数值。
+$("amountInput").addEventListener("input", e => {
+  userTouchedAmount = true;
+  const raw = e.target.value;
+  if (raw !== "" && Number.isFinite(Number(raw))) {
+    selected = bounded(raw, selected, 10, 2000, 10);
+    $("amountNum").textContent = String(selected);
+    positionPill(true);
+    scrollPresetIntoView(presetBtns.find(b => +b.dataset.v === selected));
+  }
+});
+$("amountInput").addEventListener("change", () => setAmount($("amountInput").value, true));
+$("amountInput").addEventListener("blur", () => setAmount($("amountInput").value, true));
 
 // ---------- 打卡 / 额外加喝 ----------
-function nextOpenSlot(date) {
-  const d = dayData(date);
-  return slotTimes().find(t => !(t in d.slots)) || null;
-}
 function checkinSlot(date, time, ml) {
-  const d = ensureDay(date);
   const before = dayTotal(date);
-  if (time in d.slots) delete d.slots[time]; else d.slots[time] = ml;
-  save(); afterChange(date, before);
+  if (!commit(next => {
+    const d = ensureDay(next, date);
+    if (Object.hasOwn(d.slots, time)) {
+      delete d.slots[time];
+      delete d.slotMeta[time];
+    } else {
+      d.slots[time] = ml;
+      d.slotMeta[time] = { time: clockStr() };
+    }
+  })) return false;
+  afterChange(date, before);
+  return true;
 }
 function addBonus(date, ml) {
-  const d = ensureDay(date);
   const before = dayTotal(date);
-  const now = new Date();
-  d.bonus.push({ id: Date.now() + Math.random().toString(36).slice(2, 7),
-    ml, time: String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0") });
-  save(); afterChange(date, before);
-  return d.bonus[d.bonus.length - 1];
+  const time = date === todayStr() ? clockStr() : $("historyTime").value;
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time)) { toast("请选择正确的补记时间"); return false; }
+  const entry = { id: Date.now() + "-" + Math.random().toString(36).slice(2), ml, time };
+  if (!commit(next => { ensureDay(next, date).bonus.push(entry); })) return false;
+  afterChange(date, before);
+  return true;
 }
 function removeBonus(date, id) {
-  const d = dayData(date); const before = dayTotal(date);
-  d.bonus = d.bonus.filter(b => b.id !== id);
-  save(); afterChange(date, before);
+  const before = dayTotal(date);
+  if (!commit(next => {
+    const d = ensureDay(next, date);
+    d.bonus = d.bonus.filter(b => b.id !== id);
+  })) return;
+  afterChange(date, before);
 }
 $("checkinBtn").addEventListener("click", () => {
-  if (!isToday()) { toast("只能给今天打卡，看看今天吧"); return; }
-  const t = nextOpenSlot(viewDate);
-  if (!t) { toast("今天的时段都喝完啦，可以额外加喝"); return; }
-  checkinSlot(viewDate, t, selected);
-  toast(`${t} 打卡 +${selected}ml`);
+  userTouchedAmount = true;
+  syncDate();
+  if (!isToday()) { toast("只能给今天打卡，请切换到今天"); return; }
+  const time = findOpen(state, viewDate);
+  if (!time) {
+    const pending = slotTimes().some(t => !Object.hasOwn(dayData(viewDate).slots, t));
+    toast(pending ? "下一个打卡时段尚未开始；已经喝的水可使用额外加喝" : "今天的时段都已打卡，可额外加喝");
+    return;
+  }
+  if (checkinSlot(viewDate, time, selected)) toast(time + " 打卡 +" + selected + " ml");
 });
 $("extraBtn").addEventListener("click", () => {
-  addBonus(viewDate, selected);
-  toast(`额外加喝 +${selected}ml`);
+  userTouchedAmount = true;
+  syncDate();
+  if (addBonus(viewDate, selected)) toast("额外加喝 +" + selected + " ml");
 });
-$("bonusList").addEventListener("click", (e) => {
-  const btn = e.target.closest("[data-undo]"); if (!btn) return;
-  removeBonus(viewDate, btn.dataset.undo);
+$("bonusList").addEventListener("click", e => {
+  const btn = e.target.closest("[data-undo]");
+  if (btn) removeBonus(viewDate, btn.dataset.undo);
 });
-
-// 打卡后：数字滚动、水位、达标庆祝、破裂，只在「跨过目标的那一刻」触发一次。
 function afterChange(date, before) {
   const after = dayTotal(date);
-  const goal = state.settings.goal;
-  animateNumber(displayedTotal, after, Math.min(2000, 300 + Math.abs(after - displayedTotal) * 2));
-  displayedTotal = after;
+  animateNumber(after);
   renderAll();
-  if (date !== todayStr()) return; // 往日补记不庆祝、不破裂
-  if (before < goal && after >= goal && !state.celebrated[date]) {
-    state.celebrated[date] = true; save();
-    celebrate(); // 只在跨过的一刻
+  if (date === todayStr()) {
+    const goal = dayGoal(date);
+    if (before < goal && after >= goal && !state.celebrated[date]) {
+      if (commit(next => { next.celebrated[date] = true; })) celebrate();
+    }
+    if (before <= goal && after > goal) breakBall();
+    if (before > goal && after <= goal) healBall();
+    splash();
   }
-  if (before <= goal && after > goal) breakBall();
-  if (before > goal && after <= goal) healBall();
-  // 每次打卡水花
-  splash();
 }
+
 
 // ---------- 庆祝：五彩纸屑 110 片、3 波、约 6.5 秒 + 水球弹性缩放 ----------
 function celebrate() {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   $("ballWrap").classList.add("squash");
   setTimeout(() => $("ballWrap").classList.remove("squash"), 700);
   if (navigator.vibrate) navigator.vibrate([40, 40, 40]);
@@ -219,17 +311,18 @@ function celebrate() {
 // ---------- 破裂 / 溢出 ----------
 let broken = false;
 function breakBall() {
-  if (broken) return; broken = true;
+  broken = true;
   $("ballWrap").classList.add("broken");
   if (navigator.vibrate) navigator.vibrate(120); // 破开打击感 + 震动
   spawnShards();
   toast("水满出来啦！水球破了个口子");
 }
 function healBall() {
-  if (!broken) return; broken = false;
+  broken = false;
   $("ballWrap").classList.remove("broken");
 }
 function spawnShards() {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   const r = $("ballWrap").getBoundingClientRect();
   for (let i = 0; i < 14; i++) {
     const s = document.createElement("div"); s.className = "shard";
@@ -252,7 +345,9 @@ function spawnShards() {
 const ballCv = $("ball"), bctx = ballCv.getContext("2d");
 const N = 110;
 let wave = new Float32Array(N), vel = new Float32Array(N);
+const waveScratch = new Float32Array(N);
 let visualLevel = 0;      // 0..1，画面水位（平滑追赶真实水位）
+let spillVisual = 0;
 let tiltX = 0, tiltY = 0; // 设备倾斜（-1..1）
 let shakeEnergy = 0;
 // Electron 桌面版：拖动窗口产生的等效倾斜（与设备倾斜叠加，停下后按帧衰减）。
@@ -261,7 +356,7 @@ function effTiltX() { return clamp(tiltX + windowTiltX, -1, 1); }
 let lastSplash = 0;
 
 function targetLevel() {
-  const t = dayTotal(viewDate) / state.settings.goal;
+  const t = dayTotal(viewDate) / dayGoal(viewDate);
   return clamp(t, 0, 1); // 超量时水面停在裂口高度，多余的水走溢流
 }
 function splash(strength = 1) {
@@ -272,18 +367,14 @@ function splash(strength = 1) {
 function stepWave() {
   const target = targetLevel();
   visualLevel += (target - visualLevel) * 0.045; // 平滑上升，不跳变
-  const rest = 0;
-  for (let i = 0; i < N; i++) {
-    const left = wave[i - 1] ?? wave[i], right = wave[i + 1] ?? wave[i];
-    const acc = (left + right - 2 * wave[i]) * 0.32 + (rest - wave[i]) * 0.02;
-    vel[i] = (vel[i] + acc) * 0.985;
-    wave[i] += vel[i];
+  spillVisual += ((broken ? 1 : 0) - spillVisual) * 0.085;
+  // 使用上一帧采样快照积分，避免原位更新相邻点导致能量指数发散。
+  if (performance.now() - lastWindowMotionT > 120) {
+    windowTiltX *= 0.92;
+    windowTiltY *= 0.92;
   }
-  // 倾斜让水面一侧高一侧低；摇晃注入能量。
-  // 拖窗口超过 120ms 没新数据时，等效倾斜按帧衰减，水面慢慢平复。
-  if (performance.now() - lastWindowMotionT > 120) { windowTiltX *= 0.92; windowTiltY *= 0.92; }
   const slope = effTiltX() * 14 + (Math.random() - .5) * shakeEnergy;
-  for (let i = 0; i < N; i++) wave[i] += slope * (i / N - .5) * 0.02;
+  advanceWave(wave, vel, waveScratch, slope);
   shakeEnergy *= 0.94;
 }
 function eggTheme() { return eggForDate(viewDate); }
@@ -311,7 +402,9 @@ function drawBall() {
   bctx.fillStyle = "rgba(255,255,255,.5)";
   for (let i = 0; i < 8; i++) {
     const bx = cx + Math.sin(performance.now() / 900 + i * 2.1) * R * .6;
-    const by = H - ((performance.now() / 14 + i * 97) % (H - levelY)) - levelY * 0 + levelY;
+    const depth = Math.max(0, cy + R - levelY);
+    if (depth < 8) continue;
+    const by = levelY + depth - ((performance.now() / 14 + i * 97) % depth);
     if (by > levelY + 6) { bctx.beginPath(); bctx.arc(bx, by, 3 + (i % 3), 0, Math.PI * 2); bctx.fill(); }
   }
   // 高光
@@ -328,12 +421,13 @@ function drawBall() {
 function drawPuddle() {
   const cv = $("puddle"), ctx = cv.getContext("2d");
   const W = cv.width, H = cv.height; ctx.clearRect(0, 0, W, H);
-  if (!broken) return;
-  const excess = Math.max(0, dayTotal(viewDate) - state.settings.goal);
-  const head = clamp(excess / state.settings.goal, 0, 1);
-  const flow = Math.sqrt(head); // Torricelli
+  if (spillVisual < 0.005) return;
+  const excess = Math.max(0, dayTotal(viewDate) - dayGoal(viewDate));
+  const head = clamp(excess / dayGoal(viewDate), 0, 1);
+  const flow = Math.sqrt(head) * spillVisual; // 破裂 / 愈合都有平滑过渡
   const t = performance.now() / 1000;
   // 沿球面流下的水线（方向随倾斜偏移）
+  ctx.globalAlpha = spillVisual;
   ctx.strokeStyle = "rgba(30,111,217,.55)"; ctx.lineWidth = 2 + flow * 7; ctx.lineCap = "round";
   ctx.beginPath();
   const tx = effTiltX();
@@ -347,28 +441,45 @@ function drawPuddle() {
   ctx.beginPath(); ctx.ellipse(W / 2 + tx * 90, H - 12, pw / 2, 12 + Math.sin(t * 2) * 2, 0, 0, Math.PI * 2); ctx.fill();
   ctx.strokeStyle = "rgba(30,111,217,.35)"; ctx.lineWidth = 1.5;
   ctx.beginPath(); ctx.ellipse(W / 2 + tx * 90, H - 12, pw / 2 * (0.6 + 0.2 * Math.sin(t * 2.4)), 8, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.globalAlpha = 1;
 }
-function loop() { stepWave(); drawBall(); requestAnimationFrame(loop); }
+// 固定步长模拟，避免高刷新率屏幕出现波浪速度翻倍/跳帧。
+let previousFrame = 0, accumulator = 0;
+function loop(now) {
+  const elapsed = previousFrame ? Math.min(50, now - previousFrame) : 16.67;
+  previousFrame = now;
+  if (!document.hidden) {
+    accumulator = Math.min(50, accumulator + elapsed);
+    while (accumulator >= 16.67) { stepWave(); accumulator -= 16.67; }
+    drawBall();
+  } else accumulator = 0;
+  requestAnimationFrame(loop);
+}
 
-// ---------- 今日曲线（每杯，不累计，06:00–21:00） ----------
+// ---------- 每日完整 24 小时的饮水曲线（每杯，不累计） ----------
 function drawCurve() {
   const cv = $("curve"), ctx = cv.getContext("2d");
   const W = cv.width, H = cv.height; ctx.clearRect(0, 0, W, H);
-  const padL = 44, padR = 16, padT = 18, padB = 26;
+  const padL = 44, padR = 36, padT = 18, padB = 26;
   const x0 = padL, x1 = W - padR, y0 = padT, y1 = H - padB;
-  const maxMl = Math.max(500, ...dayDrinks(viewDate).map(d => d.ml));
-  const xFor = (mins) => x0 + ((mins - 360) / (21 * 60 - 360)) * (x1 - x0);
+  const drinks = dayDrinks(viewDate);
+  cv.setAttribute("role", "img");
+  cv.setAttribute("aria-label", drinks.length
+    ? `${viewDate} 共 ${drinks.length} 次饮水：${drinks.slice(0, 24).map(d => `${d.time} ${d.ml} 毫升`).join("；")}${drinks.length > 24 ? "等" : ""}`
+    : `${viewDate} 暂无饮水记录`);
+  const maxMl = Math.max(500, ...drinks.map(d => d.ml));
+  const xFor = mins => x0 + (mins / 1440) * (x1 - x0);
   const yFor = (ml) => y1 - (ml / maxMl) * (y1 - y0);
   ctx.strokeStyle = "#e3eaf2"; ctx.lineWidth = 1;
   [0, .5, 1].forEach(f => { ctx.beginPath(); ctx.moveTo(x0, y0 + (y1 - y0) * f); ctx.lineTo(x1, y0 + (y1 - y0) * f); ctx.stroke(); });
   ctx.fillStyle = "#6b7a90"; ctx.font = "22px sans-serif"; ctx.textAlign = "center";
-  ["06:00", "09:00", "12:00", "15:00", "18:00", "21:00"].forEach((t, i) => {
-    ctx.fillText(t, xFor(360 + i * 180), H - 4);
+  ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00", "24:00"].forEach((t, i) => {
+    ctx.fillText(t, xFor(i * 240), H - 4);
   });
-  const pts = dayDrinks(viewDate).map(d => {
-    const [h, m] = d.time.split(":").map(Number);
-    return { x: xFor(h * 60 + m), y: yFor(d.ml), ml: d.ml, inRange: h * 60 + m >= 360 && h * 60 + m <= 1260 };
-  }).filter(p => p.inRange);
+  const pts = drinks.map(d => {
+    const [hour, minute] = d.time.split(":").map(Number);
+    return { x: xFor(hour * 60 + minute), y: yFor(d.ml), ml: d.ml };
+  });
   if (pts.length) {
     ctx.strokeStyle = "#1e6fd9"; ctx.lineWidth = 3; ctx.beginPath();
     pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke();
@@ -378,16 +489,16 @@ function drawCurve() {
     });
   } else {
     ctx.fillStyle = "#6b7a90"; ctx.textAlign = "center";
-    ctx.fillText("今天还没喝水，喝一杯就会出现在这里", W / 2, H / 2);
+    ctx.fillText(isToday() ? "今天还没喝水，喝一杯就会出现在这里" : "这一天没有饮水记录", W / 2, H / 2);
   }
 }
 
 // ---------- 渲染 ----------
 function renderAll() {
-  const total = dayTotal(viewDate), goal = state.settings.goal;
+  const total = dayTotal(viewDate), goal = dayGoal(viewDate);
   $("goalLabel").textContent = `目标 ${goal} ml`;
   $("leftLabel").textContent = total >= goal ? `已超 ${total - goal} ml` : `还差 ${goal - total} ml`;
-  if (document.activeElement !== $("totalNum")) $("totalNum").textContent = displayedTotal;
+  if (!numberAnimating) $("totalNum").textContent = String(displayedTotal);
   const egg = eggTheme();
   $("eggNote").textContent = egg ? `今日饮品：${egg.name} — ${egg.note}` : "";
   // 隐藏彩蛋扩展点：按日期 / 时刻 / 动作触发的非饮品彩蛋在此挂接（原版内容不捏造）
@@ -395,23 +506,34 @@ function renderAll() {
   // 日期标签与按钮状态
   const label = isToday() ? "今天" : viewDate === addDays(todayStr(), -1) ? "昨天" : viewDate;
   $("dateLabel").textContent = label;
-  $("nextDay").disabled = isToday();
+  $("slotsTitle").textContent = isToday() ? "今天的时段" : viewDate + " 的时段";
+  $("curveTitle").textContent = isToday() ? "今日每杯曲线" : viewDate + " 每杯曲线";
+  $("slotsHint").textContent = isToday() ? "点一下已经开始的时段进行打卡，再点一次撤销。" : "历史时段不可更改，若需补记可使用额外加喝并选择饮水时间。";
+  $("nextDay").disabled = viewDate >= todayStr();
   const reached = total >= goal;
   $("checkinBtn").style.display = (reached || !isToday()) ? "none" : "";
   $("extraBtn").style.flex = (reached || !isToday()) ? "1" : "";
   $("actionRow").style.flexDirection = "row";
   $("actionHint").textContent = (reached || !isToday())
-    ? "已达标 / 看往日时只有额外加喝，占满整行。"
-    : "两个按钮都用上面选好的水量；到点打卡记到最近的未打卡时段。";
+    ? "已达标或查看历史时仍可额外加喝。"
+    : "自动打卡仅占用已经到达的空时段。按默认时段合计 " + (slotTimes().length * state.settings.defaultAmount) + " ml；不够目标的部分可用额外加喝。";
   // 时段
   const d = dayData(viewDate);
   $("slots").innerHTML = "";
-  slotTimes().forEach(t => {
+  const configured = slotTimes();
+  [...new Set([...configured, ...Object.keys(d.slots)])].sort().forEach(t => {
     const b = document.createElement("button");
-    b.className = "slot press" + (t in d.slots ? " done" : ""); b.type = "button";
-    b.innerHTML = `<div class="t">${t}</div><div class="v">${t in d.slots ? d.slots[t] + " ml ✓" : "未喝"}</div>`;
+    b.className = "slot press" + (Object.hasOwn(d.slots, t) ? " done" : ""); b.type = "button";
+    const title = document.createElement("div"); title.className = "t"; title.textContent = t;
+    const value = document.createElement("div"); value.className = "v";
+    value.textContent = Object.hasOwn(d.slots,t) ? d.slots[t] + " ml ✓" + (configured.includes(t) ? "" : " · 旧时段") : "未喝";
+    b.append(title,value);
     b.addEventListener("click", () => {
+      userTouchedAmount = true;
       if (!isToday()) { toast("只能改今天的时段"); return; }
+      if (!Object.hasOwn(dayData(viewDate).slots,t) && t > clockStr()) {
+        toast("该时段还未到；已经喝的水请使用额外加喝"); return;
+      }
       checkinSlot(viewDate, t, selected);
     });
     $("slots").appendChild(b);
@@ -420,14 +542,20 @@ function renderAll() {
   $("bonusList").innerHTML = "";
   d.bonus.forEach(b => {
     const li = document.createElement("li");
-    li.innerHTML = `<span>额外加喝 ${b.ml} ml · ${b.time}</span><button class="undo" data-undo="${b.id}">撤销</button>`;
-    $("bonusList").appendChild(li);
+    const description = document.createElement("span"); description.textContent = "额外加喝 " + b.ml + " ml · " + b.time;
+    const undo = document.createElement("button"); undo.className = "undo"; undo.dataset.undo = b.id; undo.textContent = "撤销";
+    li.append(description, undo); $("bonusList").appendChild(li);
   });
+  $("historyTimeRow").hidden = isToday();
+  if (!$("historyTime").value) $("historyTime").value = "12:00";
+  $("toggleReminders").textContent = state.settings.remindersEnabled ? "关闭系统提醒" : "开启系统提醒";
+  $("toggleReminders").setAttribute("aria-pressed", String(state.settings.remindersEnabled));
+  $("reminderStatus").textContent = (state.settings.remindersEnabled ? "已启用 · " : "未启用 · ") + reminderDescription();
   // 连续达标
   let streak = 0;
   for (let i = 0; ; i++) {
     const ds = addDays(todayStr(), -i);
-    if (dayTotal(ds) >= goal) streak++; else break;
+    if (dayTotal(ds) >= dayGoal(ds)) streak++; else break;
   }
   $("streak").textContent = `连续达标 ${streak} 天`;
   drawCurve(); renderHist7();
@@ -438,7 +566,7 @@ function renderHist7() {
   const el = $("hist7"); el.innerHTML = "";
   for (let i = 6; i >= 0; i--) {
     const ds = addDays(todayStr(), -i), total = dayTotal(ds);
-    const pct = clamp(total / state.settings.goal, 0, 1);
+    const pct = clamp(total / dayGoal(ds), 0, 1);
     const col = document.createElement("div");
     col.className = "hist-bar" + (i === 0 ? " today" : "");
     col.innerHTML = `<div class="bar" style="height:${Math.max(4, pct * 82)}px"></div><div class="d">${ds.slice(5)}</div>`;
@@ -451,10 +579,10 @@ function renderHist90() {
   for (let i = 0; i < 90; i++) {
     const ds = addDays(todayStr(), -i), total = dayTotal(ds);
     const row = document.createElement("div"); row.className = "hist90-row";
-    row.innerHTML = `<span class="d">${ds}</span><span class="track"><span class="fill" style="display:block;width:${clamp(total / state.settings.goal * 100, 0, 100)}%"></span></span><span class="v">${total} ml</span>`;
+    row.innerHTML = `<span class="d">${ds}</span><span class="track"><span class="fill" style="display:block;width:${clamp(total / dayGoal(ds) * 100, 0, 100)}%"></span></span><span class="v">${total} ml</span>`;
     row.addEventListener("click", () => {
-      viewDate = ds; displayedTotal = dayTotal(ds); visualLevel = targetLevel();
-      $("historyOverlay").classList.remove("open"); renderAll();
+      switchDate(ds);
+      $("historyOverlay").classList.remove("open");
     });
     el.appendChild(row);
   }
@@ -462,8 +590,14 @@ function renderHist90() {
 $("openHistory").addEventListener("click", () => { renderHist90(); $("historyOverlay").classList.add("open"); });
 $("closeHistory").addEventListener("click", () => $("historyOverlay").classList.remove("open"));
 $("historyOverlay").addEventListener("click", (e) => { if (e.target === $("historyOverlay")) $("historyOverlay").classList.remove("open"); });
-$("prevDay").addEventListener("click", () => { viewDate = addDays(viewDate, -1); displayedTotal = dayTotal(viewDate); visualLevel = targetLevel(); renderAll(); });
-$("nextDay").addEventListener("click", () => { if (!isToday()) { viewDate = addDays(viewDate, 1); displayedTotal = dayTotal(viewDate); visualLevel = targetLevel(); renderAll(); } });
+function switchDate(date) {
+  viewDate = date;
+  // 保留上一天的可视水位，固定步长物理循环会把水面平滑过渡至新日期。
+  // 此处不能同步重设 visualLevel，否则切换时会出现一帧瞬移。
+  showNumber(dayTotal(viewDate)); renderAll();
+}
+$("prevDay").addEventListener("click", () => { syncDate(); switchDate(addDays(viewDate, -1)); });
+$("nextDay").addEventListener("click", () => { syncDate(); if (viewDate < todayStr()) switchDate(addDays(viewDate, 1)); });
 
 // ---------- 设置 ----------
 function fillSettings() {
@@ -472,29 +606,94 @@ function fillSettings() {
   $("setStart").value = state.settings.startHour;
   $("setInterval").value = state.settings.intervalHours;
 }
-$("saveSettings").addEventListener("click", () => {
-  state.settings.goal = clamp(+$("setGoal").value || 2000, 500, 5000);
-  state.settings.defaultAmount = clamp(+$("setAmount").value || 250, 10, 2000);
-  state.settings.startHour = clamp(+$("setStart").value || 8, 0, 22);
-  state.settings.intervalHours = clamp(+$("setInterval").value || 2, 1, 4);
-  save(); setAmount(state.settings.defaultAmount, true); fillSettings(); renderAll();
-  toast("设置已保存");
+$("saveSettings").addEventListener("click", async () => {
+  const updated = {
+    goal: bounded($("setGoal").value, state.settings.goal, 500, 5000, 50),
+    defaultAmount: bounded($("setAmount").value, state.settings.defaultAmount, 10, 2000, 10),
+    startHour: bounded($("setStart").value, state.settings.startHour, 0, 22),
+    intervalHours: bounded($("setInterval").value, state.settings.intervalHours, 1, 4)
+  };
+  if (!commit(next => {
+    Object.assign(next.settings, updated);
+    if (next.days[todayStr()]) next.days[todayStr()].goal = updated.goal;
+  })) return;
+  setAmount(state.settings.defaultAmount, true); fillSettings(); renderAll();
+  const result = await syncReminders(state.settings);
+  toast(result.ok ? "设置已保存" : "设置已保存，但提醒更新失败：" + result.message);
 });
 $("clearToday").addEventListener("click", () => {
-  if (!confirm("清空今天的全部打卡记录？")) return;
-  state.days[todayStr()] = { slots: {}, bonus: [] };
-  delete state.celebrated[todayStr()];
-  displayedTotal = 0; visualLevel = 0; save(); renderAll(); toast("今天已清空");
+  if (!confirm("清空今天的全部打卡记录？此操作无法撤销，建议先导出备份。")) return;
+  if (!commit(next => {
+    next.days[todayStr()] = { goal: next.settings.goal, slots: {}, slotMeta: {}, bonus: [] };
+    delete next.celebrated[todayStr()];
+  })) return;
+  showNumber(dayTotal(viewDate)); renderAll(); toast("今天已清空");
 });
+$("toggleReminders").addEventListener("click", async () => {
+  const button = $("toggleReminders"); button.disabled = true;
+  const proposed = { ...state.settings, remindersEnabled: !state.settings.remindersEnabled };
+  const result = await syncReminders(proposed, proposed.remindersEnabled);
+  if (!result.ok) { toast(result.message); button.disabled = false; return; }
+  if (!commit(next => { next.settings.remindersEnabled = proposed.remindersEnabled; })) {
+    await syncReminders(state.settings); button.disabled = false; return;
+  }
+  button.disabled = false; renderAll();
+  toast(proposed.remindersEnabled ? "已开启系统提醒" : "已关闭系统提醒");
+});
+$("exportData").addEventListener("click", async () => {
+  const button = $("exportData");
+  button.disabled = true;
+  try {
+    const payload = loadError
+      ? { format: "hsdq-raw-recovery-v1", exportedAt: new Date().toISOString(), raw: rawRecovery }
+      : { format: "hsdq-backup-v1", exportedAt: new Date().toISOString(), state };
+    const name = loadError ? "he-shui-da-ka-raw-recovery-" : "he-shui-da-ka-";
+    await exportBackup(JSON.stringify(payload, null, 2), name + todayStr() + ".json");
+    toast(loadError ? "已导出原始恢复文件，请妥善保管" : "请选择保存位置并保留备份文件");
+  } catch (error) {
+    toast("导出失败：" + (error?.message || "请重试"));
+  } finally {
+    button.disabled = false;
+  }
+});
+$("importData").addEventListener("click", () => $("importFile").click());
+$("importFile").addEventListener("change", async e => {
+  const file = e.target.files?.[0]; e.target.value = ""; if (!file) return;
+  try {
+    if (file.size > 10 * 1024 * 1024) throw new Error("文件超过 10MB");
+    const backup = JSON.parse(await file.text());
+    if (backup?.format !== "hsdq-backup-v1" || !backup.state?.settings || !backup.state?.days) throw new Error("备份结构或版本不匹配");
+    if (!isLosslessRecordState(backup.state)) throw new Error("备份存在格式损坏的记录，已拒绝导入以防丢失数据");
+    const incoming = normalizeState(backup.state);
+    const count = Object.keys(incoming.days).length;
+    if (!confirm("将用备份中的 " + count + " 天记录和设置替换本机全部数据。建议先导出旧数据。确定导入吗？")) return;
+    const serialized = JSON.stringify(incoming);
+    localStorage.setItem(KEY, serialized);
+    lastPersistedRaw = serialized;
+    state = incoming; loadError = false; rawRecovery = ""; startupWarning = "";
+    lastToday = todayStr(); switchDate(lastToday);
+    fillSettings(); setAmount(state.settings.defaultAmount);
+    const result = await syncReminders(state.settings);
+    toast(result.ok ? "备份导入成功" : "备份已导入，提醒同步失败：" + result.message);
+  } catch (error) { toast("导入失败：" + error.message); }
+});
+
 
 // ---------- 晃动 / 倾斜：deviceorientation + devicemotion ----------
 // iOS 需要用户手势授权，所以是个按钮；安卓 / 桌面直接监听。
 let motionOn = false;
 async function enableMotion() {
   try {
+    const permissions = [];
+    // iOS 需要在同一次用户点击中发起方向与加速度的权限请求。
     if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
-      const r = await DeviceOrientationEvent.requestPermission();
-      if (r !== "granted") { toast("未获得晃动权限"); return; }
+      permissions.push(DeviceOrientationEvent.requestPermission());
+    }
+    if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
+      permissions.push(DeviceMotionEvent.requestPermission());
+    }
+    if ((await Promise.all(permissions)).some(result => result !== "granted")) {
+      toast("未获得全部运动传感器权限"); return;
     }
     motionOn = true; $("shakeBtn").textContent = "晃动已开"; $("shakeBtn").classList.add("on");
     toast("晃动已开：倾斜手机，水面会跟着晃");
@@ -535,16 +734,35 @@ window.addEventListener("pointermove", (e) => {
   if (!dragging) return;
   tiltX = clamp((e.clientX / innerWidth - .5) * 2, -1, 1);
 });
-window.addEventListener("pointerup", () => { dragging = false; tiltX = 0; });
+function endDrag() { dragging = false; tiltX = 0; }
+window.addEventListener("pointerup", endDrag);
+window.addEventListener("pointercancel", endDrag);
+window.addEventListener("blur", endDrag);
 window.addEventListener("resize", () => positionPill(false));
 
 // ---------- 启动 ----------
-// 无演示数据：第一次打开是空的，今天 0 ml。
 buildPresets();
 fillSettings();
 setAmount(state.settings.defaultAmount);
-displayedTotal = dayTotal(viewDate);
+showNumber(dayTotal(viewDate));
 visualLevel = targetLevel();
 renderAll();
-introSlider(); // 入场滑块从随机非 250 选项滑到 250
+introSlider();
+window.addEventListener("storage", e => {
+  if (e.key !== KEY) return;
+  state = load(); showNumber(dayTotal(viewDate));
+  fillSettings(); renderAll(); void syncReminders(state.settings);
+});
+window.addEventListener("focus", syncDate);
+document.addEventListener("visibilitychange", () => {
+  previousFrame = 0; accumulator = 0;
+  if (!document.hidden) syncDate();
+});
+setInterval(syncDate, 30000);
+void syncReminders(state.settings).then(result => {
+  if (!result.ok && state.settings.remindersEnabled) toast(result.message);
+});
+if (startupWarning) toast(startupWarning);
+
+
 requestAnimationFrame(loop);

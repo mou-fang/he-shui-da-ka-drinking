@@ -10,3 +10,6 @@ android/.gradle/
 android/local.properties
 # Local dev state (never commit real drinking data)
 .hsdq-dev-state.json
+
+# Generated Electron entrypoint copied from dist/app.js
+/app.js

@@ -1,54 +1,158 @@
-// Electron 主进程：把同一套网页代码装进桌面窗口。
-// 数据仍存在应用内的 localStorage，与网页版互不相通。
-//
-// 窗口是竖版小弹窗：默认 420×880，约手机竖屏比例（390×844 ≈ 0.46，
-// 这里 420/880 ≈ 0.48），像手机一样窄窄地立在桌面上，不是铺满桌面的大窗口。
-// 用户用鼠标拖动窗口移动时，主进程监听 'move' 事件，用前后两次位置
-// 算出速度 / 加速度（见 window-motion.cjs），通过 IPC 发给渲染进程，
-// 渲染进程再换算成水面物理的倾斜 / 晃动输入：拖得越快晃得越厉害，
-// 停下后水面慢慢平复。网页版里没有这条通道，不影响。
-const { app, BrowserWindow } = require("electron");
-const path = require("path");
+// Electron 主进程：仅加载本地文件，系统提醒运行于后台托盘进程。
+const { app, BrowserWindow, ipcMain, Notification, Tray, Menu, nativeImage } = require("electron");
+const path = require("node:path");
 const { computeMotion } = require("./window-motion.cjs");
+const APP_ID = "com.moufang.heshuidaqia";
+if (process.platform === "win32") app.setAppUserModelId(APP_ID);
 
-const WIN_WIDTH = 420, WIN_HEIGHT = 880; // 竖版小弹窗，手机竖屏比例
+let mainWindow = null;
+let tray = null;
+let quitting = false;
+let remindersEnabled = false;
+let reminderTimes = [];
+let lastReminderKey = "";
+let reminderTimer = null;
 
-function createWindow() {
+function showWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow(false);
+  else { mainWindow.show(); mainWindow.focus(); }
+}
+function ensureTray() {
+  if (tray) return;
+  const file = app.isPackaged ? path.join(process.resourcesPath, "icon.ico") : path.join(__dirname, "..", "assets", "icon.ico");
+  const icon = nativeImage.createFromPath(file);
+  if (icon.isEmpty()) throw new Error("系统托盘图标加载失败");
+  tray = new Tray(icon);
+  tray.setToolTip("喝水打卡 · 正在后台提醒");
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: "显示喝水打卡", click: showWindow },
+    { label: "退出应用", click: () => { quitting = true; app.quit(); } },
+  ]));
+  tray.on("double-click", showWindow);
+}
+function tickReminders() {
+  if (!remindersEnabled || !Notification.isSupported()) return;
+  const now = new Date();
+  const clock = String(now.getHours()).padStart(2,"0") + ":" + String(now.getMinutes()).padStart(2,"0");
+  if (!reminderTimes.includes(clock)) return;
+  const key = [now.getFullYear(),now.getMonth(),now.getDate(),clock].join("-");
+  if (lastReminderKey === key) return;
+  lastReminderKey = key;
+  const note = new Notification({ title: "喝水打卡 · 该喝水啦", body: clock + " 记得喝一杯水并打卡。" });
+  note.on("click", showWindow);
+  note.show();
+}
+function updateReminders(input) {
+  if (!input || typeof input !== "object" || typeof input.enabled !== "boolean" || !Array.isArray(input.times)) {
+    return { ok: false, message: "通知参数无效" };
+  }
+  if (input.times.length > 24 || !input.times.every(t => typeof t === "string" && /^(?:[01]\d|2[0-3]):00$/.test(t))) {
+    return { ok: false, message: "通知时段无效" };
+  }
+  if (input.enabled && !Notification.isSupported()) {
+    return { ok: false, message: "该系统当前不支持原生通知" };
+  }
+  try {
+    if (input.enabled) ensureTray();
+    remindersEnabled = input.enabled;
+    reminderTimes = [...new Set(input.times)];
+    clearInterval(reminderTimer);
+    if (remindersEnabled) reminderTimer = setInterval(tickReminders, 15000);
+    else if (tray) { tray.destroy(); tray = null; }
+    if (!remindersEnabled && mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) showWindow();
+    if (process.platform === "win32" && app.isPackaged) {
+      app.setLoginItemSettings({ openAtLogin: remindersEnabled, args: remindersEnabled ? ["--background"] : [] });
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, message: error.message };
+  }
+}
+ipcMain.handle("reminders:set", (_event, input) => updateReminders(input));
+
+function createWindow(hidden = false) {
   const win = new BrowserWindow({
-    width: WIN_WIDTH, height: WIN_HEIGHT,
-    minWidth: 360, minHeight: 700,
-    resizable: true, useContentSize: true,
-    title: "喝水打卡",
-    webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(__dirname, "preload.cjs") },
-  });
-  win.loadFile(path.join(__dirname, "..", "index.html"));
-  win.setMenuBarVisibility(false);
-
-  // ---- 窗口拖动 → 晃动 ----
-  // 'move' 在拖动中高频触发；按 16ms 节流后发一次，避免 IPC 刷屏。
-  let last = null;       // { x, y, t, vx, vy }
-  let lastSent = 0;
-  win.on("move", () => {
-    const now = Date.now();
-    const [x, y] = win.getPosition();
-    const m = computeMotion(last, { x, y, t: now });
-    last = { x, y, t: now, vx: m.vx, vy: m.vy };
-    if (now - lastSent < 16) return; // 节流到约 60Hz
-    lastSent = now;
-    if (!win.isDestroyed() && m.speed > 1) {
-      win.webContents.send("window-motion", { ...m, t: now });
+    show: !hidden,
+    width: 420, height: 880, minWidth: 360, minHeight: 700,
+    resizable: true, useContentSize: true, title: "喝水打卡",
+    backgroundColor: "#f4f8fd",
+    webPreferences: {
+      nodeIntegration: false, contextIsolation: true, sandbox: true,
+      preload: path.join(__dirname, "preload.cjs")
     }
   });
-  // 停下时补发一次零速度，让渲染进程的水面开始平复（而不是停在最后的倾斜上）。
+  mainWindow = win;
+  win.setMenuBarVisibility(false);
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", event => event.preventDefault());
+  // 保持与 v1.0.0 相同的 file:// 页面路径，降低 Windows localStorage 升级迁移风险。
+  // 打包后的 Windows smoke test：启动真实 Electron、加载 UI 与 preload 后退出。
+  // CI 检查这一结果，避免「exe 打包成功但一运行就空白」。
+  if (process.argv.includes("--hsdq-smoke-test")) {
+    const watchdog = setTimeout(() => {
+      console.error("Smoke test timed out waiting for page load");
+      app.exit(3);
+    }, 20000);
+    win.webContents.once("did-finish-load", async () => {
+      try {
+        const ready = await win.webContents.executeJavaScript(
+          "Boolean(document.querySelector('#ball') && document.querySelector('#totalNum') && document.querySelector('#toggleReminders') && window.hsdq && typeof window.hsdq.setReminders === 'function')"
+        );
+        clearTimeout(watchdog);
+        if (!ready) console.error("Smoke test failed: UI elements or native preload bridge unavailable");
+        app.exit(ready ? 0 : 2);
+      } catch (error) {
+        clearTimeout(watchdog);
+        console.error("Smoke test renderer error", error);
+        app.exit(4);
+      }
+    });
+    win.webContents.once("did-fail-load", (_event, _code, description) => {
+      clearTimeout(watchdog);
+      console.error("Smoke test could not load UI:", description);
+      app.exit(5);
+    });
+  }
+  win.loadFile(path.join(__dirname, "..", "index.html"));
+  win.on("close", e => {
+    if (remindersEnabled && !quitting) { e.preventDefault(); win.hide(); }
+  });
+  win.on("closed", () => { if (mainWindow === win) mainWindow = null; });
+
+  let previous = null;
+  let lastSent = 0;
   let settleTimer = null;
   win.on("move", () => {
+    const now = Date.now();
+    const [x,y] = win.getPosition();
+    const motion = computeMotion(previous, {x,y,t:now});
+    previous = {x,y,t:now,vx:motion.vx,vy:motion.vy};
+    if (now - lastSent >= 16 && motion.speed > 1 && !win.isDestroyed()) {
+      lastSent = now;
+      win.webContents.send("window-motion", {...motion,t:now});
+    }
     clearTimeout(settleTimer);
     settleTimer = setTimeout(() => {
-      if (!win.isDestroyed()) win.webContents.send("window-motion", { vx: 0, vy: 0, ax: 0, ay: 0, speed: 0, energy: 0, t: Date.now(), settled: true });
-      last = null;
+      if (!win.isDestroyed()) win.webContents.send("window-motion", {
+        vx:0,vy:0,ax:0,ay:0,speed:0,energy:0,t:Date.now(),settled:true
+      });
+      previous = null;
     }, 120);
   });
+  win.on("closed", () => clearTimeout(settleTimer));
 }
-app.whenReady().then(createWindow);
-app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
-app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+// 保证同一台电脑只有一个提醒调度器；防止开机启动与手动启动导致重复通知。
+const ownsLock = app.requestSingleInstanceLock();
+if (!ownsLock) {
+  app.quit();
+} else {
+  app.on("second-instance", showWindow);
+  // 开机自启时静默加载以恢复系统提醒，避免桌面窗口闪现；手动启动保持正常显示。
+  const backgroundStart = process.platform === "win32" && process.argv.includes("--background");
+  app.whenReady().then(() => createWindow(backgroundStart));
+}
+app.on("before-quit", () => { quitting = true; });
+app.on("window-all-closed", () => {
+  if (!remindersEnabled && process.platform !== "darwin") app.quit();
+});
+app.on("activate", showWindow);

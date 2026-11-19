@@ -1,9 +1,18 @@
 appId: com.moufang.heshuidaqia
 productName: 喝水打卡
 copyright: Copyright © 2026 mou-fang
+asar: true
+extraResources:
+  - from: assets/icon.ico
+    to: icon.ico
+directories:
+  output: out/windows
 files:
   - index.html
-  - src/**/*
+  - app.js
+  - src/styles.css
+  - dist/**/*
+  - assets/icon.ico
   - electron/**/*
   - package.json
 win:
@@ -14,5 +23,4 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  # 未签名：首次安装时 Windows SmartScreen 会提示，点击“更多信息 → 仍要运行”即可。
-  # 如需签名，在 CI 里注入证书后再打包。
+  # 关闭窗口时后台托盘仍运行；退出应用请使用托盘右键菜单。
