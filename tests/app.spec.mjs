@@ -257,3 +257,34 @@ test("JSON 备份导出与导入可恢复全部已记录的饮水量", async ({ 
   await expect(page.locator("#totalNum")).toHaveText("250");
   await expect(page.locator("#leftLabel")).toHaveText("还差 1750 ml");
 });
+
+
+test("时段按钮点击前后保留同一个 DOM 节点与键盘焦点，颜色支持平滑过渡", async ({ page }) => {
+  const first = page.locator("#slots .slot").first();
+  await first.focus();
+  const before = await first.evaluate(node => { window.__slotBefore = node; return node.classList.contains("done"); });
+  expect(before).toBe(false);
+  await first.press("Enter");
+  await expect(first).toHaveClass(/done/);
+  expect(await first.evaluate(node => node === window.__slotBefore && document.activeElement === node)).toBe(true);
+  expect(await first.getAttribute("aria-pressed")).toBe("true");
+  await first.press("Enter");
+  await expect(first).not.toHaveClass(/done/);
+  expect(await first.evaluate(node => node === window.__slotBefore && document.activeElement === node)).toBe(true);
+});
+test("短时间再次达标不会被上次的定时器提前取消新水球弹性动画", async ({ page }) => {
+  await page.emulateMedia({reducedMotion:"no-preference"});
+  await page.locator("#setGoal").fill("500");
+  await page.locator("#saveSettings").click();
+  await page.locator("#amountInput").fill("500");
+  await page.locator("#amountInput").blur();
+  await page.locator("#extraBtn").click();
+  await expect(page.locator("#ballWrap")).toHaveClass(/squash/);
+  await page.waitForTimeout(300);
+  page.once("dialog", dialog => dialog.accept());
+  await page.locator("#clearToday").click();
+  await page.locator("#extraBtn").click();
+  await expect(page.locator("#ballWrap")).toHaveClass(/squash/);
+  await page.waitForTimeout(420);
+  await expect(page.locator("#ballWrap")).toHaveClass(/squash/);
+});
