@@ -181,3 +181,32 @@ test("历史日期标题与空曲线提示不再误写今天", async ({page}) =>
   await expect(page.locator("#slotsTitle")).toHaveText("今天的时段");
   await expect(page.locator("#curveTitle")).toHaveText("今日每杯曲线");
 });
+
+test("可解析但包含损坏记录时只读保护原始数据", async ({ page }) => {
+  const payload = JSON.stringify({
+    settings:{goal:2000,defaultAmount:250,startHour:8,intervalHours:2},
+    days:{"2026-11-19":{slots:{"08:00":250},bonus:[{id:"bad",ml:"250",time:"12:30"}]}}
+  });
+  await page.evaluate(p => localStorage.setItem("hsdq-v1",p),payload);
+  await page.reload();
+  await page.locator("#extraBtn").click();
+  expect(await page.evaluate(() => localStorage.getItem("hsdq-v1"))).toBe(payload);
+  const [download] = await Promise.all([page.waitForEvent("download"),page.locator("#exportData").click()]);
+  expect(download.suggestedFilename()).toContain("raw-recovery");
+});
+test("发现另一个窗口更新时不覆盖对方刚写入的记录", async ({ page }) => {
+  const other = await page.evaluate(() => {
+    const now=new Date();
+    const date=[now.getFullYear(),String(now.getMonth()+1).padStart(2,"0"),String(now.getDate()).padStart(2,"0")].join("-");
+    const value={
+      settings:{goal:2000,defaultAmount:250,startHour:8,intervalHours:2},
+      days:{[date]:{slots:{"08:00":500},bonus:[]}}
+    };
+    const raw=JSON.stringify(value);
+    localStorage.setItem("hsdq-v1",raw);
+    return raw;
+  });
+  await page.locator("#extraBtn").click();
+  expect(await page.evaluate(() => localStorage.getItem("hsdq-v1"))).toBe(other);
+  await expect(page.locator("#leftLabel")).toHaveText("还差 1500 ml");
+});
