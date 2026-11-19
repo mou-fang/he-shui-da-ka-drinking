@@ -288,3 +288,22 @@ test("短时间再次达标不会被上次的定时器提前取消新水球弹�
   await page.waitForTimeout(420);
   await expect(page.locator("#ballWrap")).toHaveClass(/squash/);
 });
+
+
+test("90 天历史弹窗支持键盘浏览、Escape 关闭并恢复原有焦点", async ({ page }) => {
+  const opener = page.locator("#openHistory");
+  await opener.focus();
+  await opener.press("Enter");
+  await expect(page.locator("#historyOverlay")).toHaveClass(/open/);
+  await expect(page.locator("#closeHistory")).toBeFocused();
+  await expect(page.locator("#hist90")).toHaveCount(1);
+  await expect(page.locator(".hist90-row")).toHaveCount(90);
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#historyOverlay")).not.toHaveClass(/open/);
+  await expect(opener).toBeFocused();
+  await opener.press("Enter");
+  await page.locator(".hist90-row").nth(1).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#dateLabel")).toHaveText("昨天");
+  await expect(opener).toBeFocused();
+});
