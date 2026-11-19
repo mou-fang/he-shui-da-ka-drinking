@@ -132,16 +132,33 @@ function setAmount(v, fromUser = false) {
   $("amountNum").textContent = selected;
   $("amountInput").value = selected;
   positionPill(true);
-  if (fromUser) userTouchedAmount = true;
+  if (fromUser) {
+    userTouchedAmount = true;
+    scrollPresetIntoView(presetBtns.find(b => +b.dataset.v === selected));
+  }
 }
+function scrollPresetIntoView(button) {
+  if (!button) return;
+  const left = button.offsetLeft - (track.clientWidth - button.offsetWidth) / 2;
+  const max = Math.max(0, track.scrollWidth - track.clientWidth);
+  const target = clamp(left, 0, max);
+  track.scrollTo({ left: target, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+}
+// 入场只移动装饰性 pill，不能改真实 selected 或输入框，避免第一次输入跳值。
 function introSlider() {
-  const others = PRESETS.filter(v => v !== state.settings.defaultAmount);
-  const start = others[Math.floor(Math.random() * others.length)];
-  selected = start; $("amountNum").textContent = start; $("amountInput").value = start;
-  positionPill(false);
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const visible = presetBtns.filter(btn => btn.offsetLeft + btn.offsetWidth <= track.clientWidth);
+  const candidates = visible.filter(btn => Number(btn.dataset.v) !== selected);
+  const destination = presetBtns.find(btn => Number(btn.dataset.v) === selected);
+  if (!candidates.length || !destination) return;
+  const start = candidates[Math.floor(Math.random() * candidates.length)];
+  pill.style.transition = "none";
+  pill.style.left = start.offsetLeft + "px";
+  pill.style.width = start.offsetWidth + "px";
+  presetBtns.forEach(btn => btn.classList.toggle("sel", btn === start));
   setTimeout(() => {
-    if (userTouchedAmount) return;
-    setAmount(state.settings.defaultAmount);
+    if (userTouchedAmount) { positionPill(false); return; }
+    requestAnimationFrame(() => { if (!userTouchedAmount) positionPill(true); });
   }, 120);
 }
 // 长按连续增减
@@ -167,6 +184,7 @@ $("amountInput").addEventListener("input", e => {
     selected = bounded(raw, selected, 10, 2000, 10);
     $("amountNum").textContent = String(selected);
     positionPill(true);
+    scrollPresetIntoView(presetBtns.find(b => +b.dataset.v === selected));
   }
 });
 $("amountInput").addEventListener("change", () => setAmount($("amountInput").value, true));
