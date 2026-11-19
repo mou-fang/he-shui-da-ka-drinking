@@ -210,3 +210,20 @@ test("发现另一个窗口更新时不覆盖对方刚写入的记录", async ({
   expect(await page.evaluate(() => localStorage.getItem("hsdq-v1"))).toBe(other);
   await expect(page.locator("#leftLabel")).toHaveText("还差 1500 ml");
 });
+
+test("夜间 23:45 的饮水记录也显示在全天曲线中", async ({ page }) => {
+  await page.evaluate(() => {
+    const d=new Date();
+    const day=[d.getFullYear(),String(d.getMonth()+1).padStart(2,"0"),String(d.getDate()).padStart(2,"0")].join("-");
+    const state={
+      settings:{goal:2000,defaultAmount:250,startHour:8,intervalHours:2},
+      days:{[day]:{goal:2000,slots:{},bonus:[{id:"late",ml:350,time:"23:45"}]}},
+      celebrated:{}
+    };
+    localStorage.setItem("hsdq-v1",JSON.stringify(state));
+  });
+  await page.reload();
+  await expect(page.locator("#curve")).toHaveAttribute("aria-label",/23:45 350 毫升/);
+  await expect(page.locator(".axis-note")).toContainText("00:00–24:00");
+  await expect(page.locator("#totalNum")).toHaveText("350");
+});
