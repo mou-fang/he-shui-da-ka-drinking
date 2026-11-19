@@ -6,6 +6,7 @@ import {
 } from "./core.js";
 import { syncReminders, reminderDescription, reminderPlatform } from "./reminders.js";
 import { exportBackup } from "./backup.js";
+import { advanceWave } from "./wave.js";
 
 const PRESETS = [100, 150, 200, 250, 300, 400, 500, 750, 1000];
 const $ = id => document.getElementById(id);
@@ -331,6 +332,7 @@ function spawnShards() {
 const ballCv = $("ball"), bctx = ballCv.getContext("2d");
 const N = 110;
 let wave = new Float32Array(N), vel = new Float32Array(N);
+const waveScratch = new Float32Array(N);
 let visualLevel = 0;      // 0..1，画面水位（平滑追赶真实水位）
 let spillVisual = 0;
 let tiltX = 0, tiltY = 0; // 设备倾斜（-1..1）
@@ -353,18 +355,13 @@ function stepWave() {
   const target = targetLevel();
   visualLevel += (target - visualLevel) * 0.045; // 平滑上升，不跳变
   spillVisual += ((broken ? 1 : 0) - spillVisual) * 0.085;
-  const rest = 0;
-  for (let i = 0; i < N; i++) {
-    const left = wave[i - 1] ?? wave[i], right = wave[i + 1] ?? wave[i];
-    const acc = (left + right - 2 * wave[i]) * 0.32 + (rest - wave[i]) * 0.02;
-    vel[i] = (vel[i] + acc) * 0.985;
-    wave[i] += vel[i];
+  // 使用上一帧采样快照积分，避免原位更新相邻点导致能量指数发散。
+  if (performance.now() - lastWindowMotionT > 120) {
+    windowTiltX *= 0.92;
+    windowTiltY *= 0.92;
   }
-  // 倾斜让水面一侧高一侧低；摇晃注入能量。
-  // 拖窗口超过 120ms 没新数据时，等效倾斜按帧衰减，水面慢慢平复。
-  if (performance.now() - lastWindowMotionT > 120) { windowTiltX *= 0.92; windowTiltY *= 0.92; }
   const slope = effTiltX() * 14 + (Math.random() - .5) * shakeEnergy;
-  for (let i = 0; i < N; i++) wave[i] += slope * (i / N - .5) * 0.02;
+  advanceWave(wave, vel, waveScratch, slope);
   shakeEnergy *= 0.94;
 }
 function eggTheme() { return eggForDate(viewDate); }
