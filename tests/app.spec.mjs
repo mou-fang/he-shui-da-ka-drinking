@@ -111,3 +111,21 @@ test("多个手机宽度下卡片不互相覆盖且页面没有水平溢出",asy
     expect(positions.actionRight).toBeLessThanOrEqual(positions.amountRight);
   }
 });
+
+
+test("切换历史日期时水球液面逐帧变化而非闪现", async ({page}) => {
+  await page.locator("#amountInput").fill("1000");
+  await page.locator("#amountInput").blur();
+  await page.locator("#extraBtn").click();
+  await page.locator("#extraBtn").click();
+  const atCenter = () => page.locator("#ball").evaluate(canvas => {
+    const rgba = canvas.getContext("2d").getImageData(320,320,1,1).data;
+    return { red: rgba[0], green: rgba[1], blue: rgba[2] };
+  });
+  await expect.poll(async () => (await atCenter()).red, { timeout: 4000 }).toBeLessThan(200);
+  await page.locator("#prevDay").click();
+  await page.waitForTimeout(80);
+  // 旧液位需逐步下降；不允许在切日期的第一帧直接清空水球。
+  expect((await atCenter()).red).toBeLessThan(220);
+  await expect.poll(async () => (await atCenter()).red, { timeout: 4000 }).toBeGreaterThan(220);
+});
