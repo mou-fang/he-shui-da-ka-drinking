@@ -10,7 +10,7 @@ export function planAndroidReminders(settings, pending = []) {
     title:"喝水打卡 · 该喝水啦",
     body:time+" 喝一杯水，记得打卡。",
     // 明确设秒为 0，避免插件 DateMatch 继承当前秒数，导致每次提醒晚数十秒。
-    schedule:{on:{hour:Number(time.slice(0,2)),minute:0,second:0},allowWhileIdle:false}
+    schedule:{on:{hour:Number(time.slice(0,2)),minute:0,second:0},allowWhileIdle:true}
   }));
   const expectedIds = new Set(expected.map(n=>n.id));
   const schedule = expected.filter(n => {
