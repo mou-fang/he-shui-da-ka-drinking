@@ -32,7 +32,7 @@ test("已存在的时段修改设置后仍能看到并撤销", async ({ page }) 
   await expect(page.locator("#leftLabel")).toHaveText("还差 2000 ml");
 });
 test("达到目标后再喝超量触发破裂碎片，撤销后平滑恢复", async ({ page }) => {
-  await page.emulateMedia({ reducedMotion:"reduce" });
+  await page.emulateMedia({ reducedMotion:"no-preference" });
   await page.locator("#amountInput").fill("1000");
   await page.locator("#amountInput").blur();
   await expect(page.locator("#amountNum")).toHaveText("1000");
@@ -129,4 +129,32 @@ test("切换历史日期时水球液面逐帧变化而非闪现", async ({page})
   // 旧液位需逐步下降；不允许在切日期的第一帧直接清空水球。
   expect((await atCenter()).red).toBeLessThan(220);
   await expect.poll(async () => (await atCenter()).red, { timeout: 4000 }).toBeGreaterThan(220);
+});
+
+test("历史目标值不被今天修改目标所覆盖", async ({page}) => {
+  const yesterday=await page.evaluate(() => {
+    const d=new Date(); d.setDate(d.getDate()-1);
+    return [d.getFullYear(),String(d.getMonth()+1).padStart(2,"0"),String(d.getDate()).padStart(2,"0")].join("-");
+  });
+  await page.evaluate(date => {
+    localStorage.setItem("hsdq-v1",JSON.stringify({
+      settings:{goal:2000,defaultAmount:250,startHour:8,intervalHours:2,removedSlots:[],remindersEnabled:false},
+      days:{[date]:{goal:2000,slots:{"08:00":2000},slotMeta:{},bonus:[]}},celebrated:{}
+    }));
+  },yesterday);
+  await page.reload();
+  await page.locator("#setGoal").fill("3000");
+  await page.locator("#saveSettings").click();
+  await page.locator("#prevDay").click();
+  await expect(page.locator("#goalLabel")).toHaveText("目标 2000 ml");
+  await expect(page.locator("#leftLabel")).toHaveText("已超 0 ml");
+});
+test("系统减少动态效果时不生成额外碎片或纸屑", async ({page}) => {
+  await page.emulateMedia({reducedMotion:"reduce"});
+  await page.locator("#amountInput").fill("2000");
+  await page.locator("#amountInput").blur();
+  await page.locator("#extraBtn").click();
+  await page.locator("#extraBtn").click();
+  await expect(page.locator("#ballWrap")).toHaveClass(/broken/);
+  await expect(page.locator(".shard")).toHaveCount(0);
 });

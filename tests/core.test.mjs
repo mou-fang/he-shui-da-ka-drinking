@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   freshState, normalizeState, todayStr, addDays, bounded, slotTimes, dayTotal,
-  dayDrinks, ensureDay, nextOpenSlot, reminderTimes
+  dayDrinks, dayGoal, ensureDay, nextOpenSlot, reminderTimes
 } from "../src/core.js";
 
 test("初始数据、设置和空天统计", () => {
@@ -32,7 +32,7 @@ test("允许晚间 21、22 点起始且保留 00 点", () => {
 test("选择最近的已经到达的空时段而不是早晨第一个", () => {
   const state = freshState();
   assert.equal(nextOpenSlot(state,"2026-11-19",new Date(2026,10,19,15,30)),"14:00");
-  assert.equal(nextOpenSlot(state,"2026-11-19",new Date(2026,10,19,7,30)),"08:00");
+  assert.equal(nextOpenSlot(state,"2026-11-19",new Date(2026,10,19,7,30)),null);
   ensureDay(state,"2026-11-19").slots["14:00"]=250;
   assert.equal(nextOpenSlot(state,"2026-11-19",new Date(2026,10,19,15,30)),"12:00");
 });
@@ -58,4 +58,21 @@ test("损坏状态不会导致原型污染、NaN 或数组崩溃", () => {
 test("每日提醒时段与显示的打卡时段一致", () => {
   const settings={startHour:8,intervalHours:3,removedSlots:["14:00"]};
   assert.deepEqual(reminderTimes(settings),slotTimes(settings));
+});
+
+test("历史日目标独立快照，调整今日目标不应改变昨天的达标情况", () => {
+  const state=freshState();
+  const d=ensureDay(state,"2026-11-18");
+  d.slots["08:00"]=2000;
+  assert.equal(dayGoal(state,"2026-11-18"),2000);
+  state.settings.goal=3000;
+  assert.equal(dayGoal(state,"2026-11-18"),2000);
+  assert.equal(dayGoal(state,"2026-11-19"),3000);
+  const imported=normalizeState(state);
+  assert.equal(dayGoal(imported,"2026-11-18"),2000);
+});
+test("首个时段之前自动打卡不应提前抢占未来时段", () => {
+  const state=freshState();
+  assert.equal(nextOpenSlot(state,"2026-11-19",new Date(2026,10,19,7,59)),null);
+  assert.equal(nextOpenSlot(state,"2026-11-19",new Date(2026,10,19,8,0)),"08:00");
 });
