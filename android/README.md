@@ -1,9 +1,9 @@
 # android/ 目录
 
-这个目录是给 Capacitor 预留的。生成方式（需要 JDK 17 + Android SDK，见仓库根 README）：
+这个目录是给 Capacitor 预留的。生成方式（需要 JDK 21 + Android SDK，见仓库根 README）：
 
 ```bash
-npm run setup:android   # 装 @capacitor/core + @capacitor/cli，生成 android/ 原生工程
+npm run setup:android   # 打包 Web 代码，安装 Capacitor 原生工程（已经有工程则不覆盖）
 npm run package:android # 同步网页代码并用 Gradle 打 debug APK
 ```
 
