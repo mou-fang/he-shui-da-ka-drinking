@@ -528,6 +528,7 @@ function drawCurve() {
 // ---------- 渲染 ----------
 function renderAll() {
   const total = dayTotal(viewDate), goal = dayGoal(viewDate);
+  $("appSubtitle").textContent = `每日目标 ${state.settings.goal} ml · 每 ${state.settings.intervalHours} 小时一个时段`;
   $("goalLabel").textContent = `目标 ${goal} ml`;
   $("leftLabel").textContent = total >= goal ? `已超 ${total - goal} ml` : `还差 ${goal - total} ml`;
   if (!numberAnimating) $("totalNum").textContent = String(displayedTotal);
