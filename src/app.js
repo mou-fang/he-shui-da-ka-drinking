@@ -231,7 +231,11 @@ $("checkinBtn").addEventListener("click", () => {
   syncDate();
   if (!isToday()) { toast("只能给今天打卡，请切换到今天"); return; }
   const time = findOpen(state, viewDate);
-  if (!time) { toast("今天的时段都已打卡，可使用额外加喝"); return; }
+  if (!time) {
+    const pending = slotTimes().some(t => !Object.hasOwn(dayData(viewDate).slots, t));
+    toast(pending ? "下一个打卡时段尚未开始；已经喝的水可使用额外加喝" : "今天的时段都已打卡，可额外加喝");
+    return;
+  }
   if (checkinSlot(viewDate, time, selected)) toast(time + " 打卡 +" + selected + " ml");
 });
 $("extraBtn").addEventListener("click", () => {
@@ -261,6 +265,7 @@ function afterChange(date, before) {
 
 // ---------- 庆祝：五彩纸屑 110 片、3 波、约 6.5 秒 + 水球弹性缩放 ----------
 function celebrate() {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   $("ballWrap").classList.add("squash");
   setTimeout(() => $("ballWrap").classList.remove("squash"), 700);
   if (navigator.vibrate) navigator.vibrate([40, 40, 40]);
@@ -303,6 +308,7 @@ function healBall() {
   $("ballWrap").classList.remove("broken");
 }
 function spawnShards() {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   const r = $("ballWrap").getBoundingClientRect();
   for (let i = 0; i < 14; i++) {
     const s = document.createElement("div"); s.className = "shard";
@@ -491,8 +497,8 @@ function renderAll() {
   $("extraBtn").style.flex = (reached || !isToday()) ? "1" : "";
   $("actionRow").style.flexDirection = "row";
   $("actionHint").textContent = (reached || !isToday())
-    ? "已达标 / 看往日时只有额外加喝，占满整行。"
-    : "两个按钮都用上面选好的水量；到点打卡记到最近的未打卡时段。";
+    ? "已达标或查看历史时仍可额外加喝。"
+    : "自动打卡仅占用已经到达的空时段。按默认时段合计 " + (slotTimes().length * state.settings.defaultAmount) + " ml；不够目标的部分可用额外加喝。";
   // 时段
   const d = dayData(viewDate);
   $("slots").innerHTML = "";
@@ -507,6 +513,9 @@ function renderAll() {
     b.addEventListener("click", () => {
       userTouchedAmount = true;
       if (!isToday()) { toast("只能改今天的时段"); return; }
+      if (!Object.hasOwn(dayData(viewDate).slots,t) && t > clockStr()) {
+        toast("该时段还未到；已经喝的水请使用额外加喝"); return;
+      }
       checkinSlot(viewDate, t, selected);
     });
     $("slots").appendChild(b);
@@ -654,9 +663,16 @@ $("importFile").addEventListener("change", async e => {
 let motionOn = false;
 async function enableMotion() {
   try {
+    const permissions = [];
+    // iOS 需要在同一次用户点击中发起方向与加速度的权限请求。
     if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
-      const r = await DeviceOrientationEvent.requestPermission();
-      if (r !== "granted") { toast("未获得晃动权限"); return; }
+      permissions.push(DeviceOrientationEvent.requestPermission());
+    }
+    if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
+      permissions.push(DeviceMotionEvent.requestPermission());
+    }
+    if ((await Promise.all(permissions)).some(result => result !== "granted")) {
+      toast("未获得全部运动传感器权限"); return;
     }
     motionOn = true; $("shakeBtn").textContent = "晃动已开"; $("shakeBtn").classList.add("on");
     toast("晃动已开：倾斜手机，水面会跟着晃");
