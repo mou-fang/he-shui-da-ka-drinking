@@ -328,3 +328,13 @@ test("网页提醒在浏览器计时器延迟两分钟内补发，刷新页面�
   await page.reload();
   await expect.poll(() => page.evaluate(() => window.__webReminders.length)).toBe(0);
 });
+
+
+test("更改目标和间隔后页眉文字即时更新，不残留写死的 2 升/2 小时", async ({page}) => {
+  await page.locator("#setGoal").fill("3000");
+  await page.locator("#setInterval").fill("3");
+  await page.locator("#saveSettings").click();
+  await expect(page.locator("#appSubtitle")).toHaveText("每日目标 3000 ml · 每 3 小时一个时段");
+  await page.reload();
+  await expect(page.locator("#appSubtitle")).toHaveText("每日目标 3000 ml · 每 3 小时一个时段");
+});
