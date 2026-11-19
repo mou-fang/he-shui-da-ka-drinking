@@ -2,6 +2,9 @@ appId: com.moufang.heshuidaqia
 productName: 喝水打卡
 copyright: Copyright © 2026 mou-fang
 asar: true
+extraResources:
+  - from: assets/icon.ico
+    to: icon.ico
 directories:
   output: out/windows
 files:
