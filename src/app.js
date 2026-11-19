@@ -7,6 +7,7 @@ import {
 import { syncReminders, reminderDescription, reminderPlatform } from "./reminders.js";
 import { exportBackup } from "./backup.js";
 import { advanceWave } from "./wave.js";
+import { DEFAULT_WATER_COLORS, hexRgb, mixRgb, cssRgb } from "./palette.js";
 
 const PRESETS = [100, 150, 200, 250, 300, 400, 500, 750, 1000];
 const $ = id => document.getElementById(id);
@@ -360,6 +361,24 @@ let wave = new Float32Array(N), vel = new Float32Array(N);
 const waveScratch = new Float32Array(N);
 let visualLevel = 0;      // 0..1，画面水位（平滑追赶真实水位）
 let spillVisual = 0;
+let paletteTop = hexRgb(DEFAULT_WATER_COLORS.top);
+let paletteDeep = hexRgb(DEFAULT_WATER_COLORS.deep);
+function targetPalette() {
+  const egg = eggTheme();
+  return egg ? {top:hexRgb(egg.top),deep:hexRgb(egg.deep)}
+    : {top:hexRgb(DEFAULT_WATER_COLORS.top),deep:hexRgb(DEFAULT_WATER_COLORS.deep)};
+}
+function snapPaletteToTheme() {
+  const target = targetPalette();
+  paletteTop = target.top;
+  paletteDeep = target.deep;
+}
+function stepPalette() {
+  const target = targetPalette();
+  const factor = matchMedia("(prefers-reduced-motion: reduce)").matches ? 1 : 0.1;
+  paletteTop = mixRgb(paletteTop,target.top,factor);
+  paletteDeep = mixRgb(paletteDeep,target.deep,factor);
+}
 let tiltX = 0, tiltY = 0; // 设备倾斜（-1..1）
 let shakeEnergy = 0;
 // Electron 桌面版：拖动窗口产生的等效倾斜（与设备倾斜叠加，停下后按帧衰减）。
@@ -380,6 +399,7 @@ function stepWave() {
   const target = targetLevel();
   visualLevel += (target - visualLevel) * 0.045; // 平滑上升，不跳变
   spillVisual += ((broken ? 1 : 0) - spillVisual) * 0.085;
+  stepPalette();
   // 使用上一帧采样快照积分，避免原位更新相邻点导致能量指数发散。
   if (performance.now() - lastWindowMotionT > 120) {
     windowTiltX *= 0.92;
@@ -393,8 +413,8 @@ function eggTheme() { return eggForDate(viewDate); }
 function drawBall() {
   const W = ballCv.width, H = ballCv.height, cx = W / 2, cy = H / 2, R = W / 2 - 6;
   bctx.clearRect(0, 0, W, H);
-  const theme = eggTheme();
-  const top = theme ? theme.top : "#bfe8ff", deep = theme ? theme.deep : "#1e6fd9";
+  // 球内主题色沿固定物理步长渐变，切换日期不会瞬时从一种颜色跳到另一种。
+  const top = cssRgb(paletteTop), deep = cssRgb(paletteDeep);
   // 玻璃球底
   bctx.save();
   bctx.beginPath(); bctx.arc(cx, cy, R, 0, Math.PI * 2); bctx.clip();
@@ -803,6 +823,7 @@ fillSettings();
 setAmount(state.settings.defaultAmount);
 showNumber(dayTotal(viewDate));
 visualLevel = targetLevel();
+snapPaletteToTheme();
 renderAll();
 introSlider();
 window.addEventListener("storage", e => {
