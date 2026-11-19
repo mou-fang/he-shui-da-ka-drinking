@@ -1,59 +1,58 @@
 import { eggForDate, HIDDEN_EGGS } from "./eggs.js";
+import {
+  KEY, clamp, freshState, normalizeState, todayStr, addDays, clockStr, bounded,
+  slotTimes as slotsFor, dayData as readDay, dayTotal as readTotal,
+  dayDrinks as readDrinks, nextOpenSlot as findOpen, ensureDay
+} from "./core.js";
+import { syncReminders, reminderDescription, reminderPlatform } from "./reminders.js";
 
-// ---------- 存储：localStorage only，初始为空（无演示数据、无真实数据） ----------
-const KEY = "hsdq-v1";
 const PRESETS = [100, 150, 200, 250, 300, 400, 500, 750, 1000];
-const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-const $ = (id) => document.getElementById(id);
-
-function todayStr(d = new Date()) {
-  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), dd = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${dd}`;
-}
-function addDays(str, n) {
-  const [y, m, d] = str.split("-").map(Number);
-  return todayStr(new Date(y, m - 1, d + n));
-}
+const $ = id => document.getElementById(id);
+let startupWarning = "";
 function load() {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) { const s = JSON.parse(raw); if (s && s.settings && s.days) return s; }
-  } catch { /* 损坏则重建 */ }
-  return { settings: { goal: 2000, defaultAmount: 250, startHour: 8, intervalHours: 2, removedSlots: [] },
-           days: {}, celebrated: {} };
+    return raw ? normalizeState(JSON.parse(raw)) : freshState();
+  } catch {
+    startupWarning = "本地记录读取失败，尚未覆盖原始数据。请先检查或导出备份。";
+    return freshState();
+  }
 }
 let state = load();
-function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { /* 容量满时静默失败 */ } }
-
-let viewDate = todayStr();          // 正在看的日期（默认今天）
+let viewDate = todayStr();
+let lastToday = viewDate;
 let selected = state.settings.defaultAmount;
-let displayedTotal = 0;             // 屏幕上滚动显示的数字
-let userTouchedAmount = false;      // 入场滑块动画是否被用户打断
-
-// ---------- 日期 / 时段 ----------
-function slotTimes() {
-  const { startHour, intervalHours, removedSlots } = state.settings;
-  const out = [];
-  for (let h = startHour; h <= 20; h += intervalHours) {
-    const t = String(h).padStart(2, "0") + ":00";
-    if (!removedSlots.includes(t)) out.push(t);
-  }
-  return out.length ? out : ["08:00"];
-}
-function dayData(date) { return state.days[date] || { slots: {}, bonus: [] }; }
-function ensureDay(date) { if (!state.days[date]) state.days[date] = { slots: {}, bonus: [] }; return state.days[date]; }
-function dayTotal(date) {
-  const d = dayData(date);
-  return Object.values(d.slots).reduce((a, b) => a + b, 0) + d.bonus.reduce((a, b) => a + b.ml, 0);
-}
-function dayDrinks(date) { // 每杯记录：{ time: "HH:MM", ml }，按时间排
-  const d = dayData(date);
-  const list = Object.entries(d.slots).map(([time, ml]) => ({ time, ml, kind: "slot" }));
-  for (const b of d.bonus) list.push({ time: b.time, ml: b.ml, kind: "bonus" });
-  return list.sort((a, b) => a.time.localeCompare(b.time));
-}
+let displayedTotal = 0;
+let userTouchedAmount = false;
+function slotTimes() { return slotsFor(state.settings); }
+function dayData(date) { return readDay(state, date); }
+function dayTotal(date) { return readTotal(state, date); }
+function dayDrinks(date) { return readDrinks(state, date); }
 function isToday() { return viewDate === todayStr(); }
-function goalReached(date) { return dayTotal(date) >= state.settings.goal; }
+
+// 先持久化候选状态，成功后才改变内存状态；配额满也不会假装打卡成功。
+function commit(change) {
+  try {
+    const next = JSON.parse(JSON.stringify(state));
+    change(next);
+    localStorage.setItem(KEY, JSON.stringify(next));
+    state = next;
+    return true;
+  } catch (error) {
+    toast("保存失败：请检查设备存储空间或隐私模式");
+    console.error("喝水记录保存失败", error);
+    return false;
+  }
+}
+function syncDate() {
+  const now = todayStr();
+  if (now === lastToday) return;
+  const wasCurrent = viewDate === lastToday;
+  lastToday = now;
+  if (wasCurrent) switchDate(now); else renderAll();
+  if (state.settings.remindersEnabled) void syncReminders(state.settings);
+}
+
 
 // ---------- 小工具 ----------
 let toastTimer = null;
@@ -62,17 +61,34 @@ function toast(msg) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove("show"), 2200);
 }
 
-// 数字逐位滚动：先快后慢，最多 2 秒，与水位上升同步。
-function animateNumber(from, to, dur = 1400) {
-  const start = performance.now(); const el = $("totalNum");
-  function frame(now) {
-    const p = clamp((now - start) / dur, 0, 1);
-    const eased = 1 - Math.pow(1 - p, 3); // 先快后慢
-    el.textContent = Math.round(from + (to - from) * eased);
-    if (p < 1) requestAnimationFrame(frame);
-  }
-  requestAnimationFrame(frame);
+// 动画在切日期、连续点击时取消旧帧，避免旧数字覆盖新状态。
+let numberFrame = 0;
+let numberAnimating = false;
+function showNumber(value) {
+  cancelAnimationFrame(numberFrame);
+  numberAnimating = false;
+  displayedTotal = value;
+  $("totalNum").textContent = String(value);
 }
+function animateNumber(to) {
+  const startValue = Number($("totalNum").textContent) || 0;
+  cancelAnimationFrame(numberFrame);
+  displayedTotal = to;
+  if (document.hidden || matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    showNumber(to); return;
+  }
+  numberAnimating = true;
+  const start = performance.now();
+  const duration = Math.min(1800, 300 + Math.abs(to - startValue) * 1.3);
+  function frame(now) {
+    const p = clamp((now - start) / duration, 0, 1);
+    $("totalNum").textContent = String(Math.round(startValue + (to - startValue) * (1 - Math.pow(1 - p, 3))));
+    if (p < 1) numberFrame = requestAnimationFrame(frame);
+    else { numberAnimating = false; $("totalNum").textContent = String(to); }
+  }
+  numberFrame = requestAnimationFrame(frame);
+}
+
 
 // ---------- 选水量：预设滑块 + 直接输入 + ±50 步进 ----------
 // 入场：滑块先从一个随机的非 250 选项滑到 250，~120ms 内开始；用户一点就取消。
@@ -97,7 +113,7 @@ function positionPill(animate = true) {
   presetBtns.forEach(b => b.classList.toggle("sel", +b.dataset.v === selected));
 }
 function setAmount(v, fromUser = false) {
-  selected = clamp(Math.round(v / 10) * 10, 10, 2000);
+  selected = bounded(v, selected, 10, 2000, 10);
   $("amountNum").textContent = selected;
   $("amountInput").value = selected;
   positionPill(true);
@@ -125,66 +141,74 @@ $("minusBtn").addEventListener("click", () => {});
 $("plusBtn").addEventListener("click", () => {});
 holdable($("minusBtn"), () => setAmount(selected - 50, true));
 holdable($("plusBtn"), () => setAmount(selected + 50, true));
-$("amountInput").addEventListener("change", () => setAmount(+$("amountInput").value || 250, true));
+for (const [id, delta] of [["minusBtn", -50], ["plusBtn", 50]]) {
+  $(id).addEventListener("click", e => { if (e.detail === 0) setAmount(selected + delta, true); });
+}
+$("amountInput").addEventListener("change", () => setAmount($("amountInput").value, true));
 
 // ---------- 打卡 / 额外加喝 ----------
-function nextOpenSlot(date) {
-  const d = dayData(date);
-  return slotTimes().find(t => !(t in d.slots)) || null;
-}
 function checkinSlot(date, time, ml) {
-  const d = ensureDay(date);
   const before = dayTotal(date);
-  if (time in d.slots) delete d.slots[time]; else d.slots[time] = ml;
-  save(); afterChange(date, before);
+  if (!commit(next => {
+    const d = ensureDay(next, date);
+    if (Object.hasOwn(d.slots, time)) {
+      delete d.slots[time];
+      delete d.slotMeta[time];
+    } else {
+      d.slots[time] = ml;
+      d.slotMeta[time] = { time: clockStr() };
+    }
+  })) return false;
+  afterChange(date, before);
+  return true;
 }
 function addBonus(date, ml) {
-  const d = ensureDay(date);
   const before = dayTotal(date);
-  const now = new Date();
-  d.bonus.push({ id: Date.now() + Math.random().toString(36).slice(2, 7),
-    ml, time: String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0") });
-  save(); afterChange(date, before);
-  return d.bonus[d.bonus.length - 1];
+  const time = date === todayStr() ? clockStr() : $("historyTime").value;
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time)) { toast("请选择正确的补记时间"); return false; }
+  const entry = { id: Date.now() + "-" + Math.random().toString(36).slice(2), ml, time };
+  if (!commit(next => { ensureDay(next, date).bonus.push(entry); })) return false;
+  afterChange(date, before);
+  return true;
 }
 function removeBonus(date, id) {
-  const d = dayData(date); const before = dayTotal(date);
-  d.bonus = d.bonus.filter(b => b.id !== id);
-  save(); afterChange(date, before);
+  const before = dayTotal(date);
+  if (!commit(next => {
+    const d = ensureDay(next, date);
+    d.bonus = d.bonus.filter(b => b.id !== id);
+  })) return;
+  afterChange(date, before);
 }
 $("checkinBtn").addEventListener("click", () => {
-  if (!isToday()) { toast("只能给今天打卡，看看今天吧"); return; }
-  const t = nextOpenSlot(viewDate);
-  if (!t) { toast("今天的时段都喝完啦，可以额外加喝"); return; }
-  checkinSlot(viewDate, t, selected);
-  toast(`${t} 打卡 +${selected}ml`);
+  syncDate();
+  if (!isToday()) { toast("只能给今天打卡，请切换到今天"); return; }
+  const time = findOpen(state, viewDate);
+  if (!time) { toast("今天的时段都已打卡，可使用额外加喝"); return; }
+  if (checkinSlot(viewDate, time, selected)) toast(time + " 打卡 +" + selected + " ml");
 });
 $("extraBtn").addEventListener("click", () => {
-  addBonus(viewDate, selected);
-  toast(`额外加喝 +${selected}ml`);
+  syncDate();
+  if (addBonus(viewDate, selected)) toast("额外加喝 +" + selected + " ml");
 });
-$("bonusList").addEventListener("click", (e) => {
-  const btn = e.target.closest("[data-undo]"); if (!btn) return;
-  removeBonus(viewDate, btn.dataset.undo);
+$("bonusList").addEventListener("click", e => {
+  const btn = e.target.closest("[data-undo]");
+  if (btn) removeBonus(viewDate, btn.dataset.undo);
 });
-
-// 打卡后：数字滚动、水位、达标庆祝、破裂，只在「跨过目标的那一刻」触发一次。
 function afterChange(date, before) {
   const after = dayTotal(date);
-  const goal = state.settings.goal;
-  animateNumber(displayedTotal, after, Math.min(2000, 300 + Math.abs(after - displayedTotal) * 2));
-  displayedTotal = after;
+  animateNumber(after);
   renderAll();
-  if (date !== todayStr()) return; // 往日补记不庆祝、不破裂
-  if (before < goal && after >= goal && !state.celebrated[date]) {
-    state.celebrated[date] = true; save();
-    celebrate(); // 只在跨过的一刻
+  if (date === todayStr()) {
+    const goal = state.settings.goal;
+    if (before < goal && after >= goal && !state.celebrated[date]) {
+      if (commit(next => { next.celebrated[date] = true; })) celebrate();
+    }
+    if (before <= goal && after > goal) breakBall();
+    if (before > goal && after <= goal) healBall();
+    splash();
   }
-  if (before <= goal && after > goal) breakBall();
-  if (before > goal && after <= goal) healBall();
-  // 每次打卡水花
-  splash();
 }
+
 
 // ---------- 庆祝：五彩纸屑 110 片、3 波、约 6.5 秒 + 水球弹性缩放 ----------
 function celebrate() {
@@ -219,14 +243,14 @@ function celebrate() {
 // ---------- 破裂 / 溢出 ----------
 let broken = false;
 function breakBall() {
-  if (broken) return; broken = true;
+  broken = true;
   $("ballWrap").classList.add("broken");
   if (navigator.vibrate) navigator.vibrate(120); // 破开打击感 + 震动
   spawnShards();
   toast("水满出来啦！水球破了个口子");
 }
 function healBall() {
-  if (!broken) return; broken = false;
+  broken = false;
   $("ballWrap").classList.remove("broken");
 }
 function spawnShards() {
@@ -253,6 +277,7 @@ const ballCv = $("ball"), bctx = ballCv.getContext("2d");
 const N = 110;
 let wave = new Float32Array(N), vel = new Float32Array(N);
 let visualLevel = 0;      // 0..1，画面水位（平滑追赶真实水位）
+let spillVisual = 0;
 let tiltX = 0, tiltY = 0; // 设备倾斜（-1..1）
 let shakeEnergy = 0;
 // Electron 桌面版：拖动窗口产生的等效倾斜（与设备倾斜叠加，停下后按帧衰减）。
@@ -272,6 +297,7 @@ function splash(strength = 1) {
 function stepWave() {
   const target = targetLevel();
   visualLevel += (target - visualLevel) * 0.045; // 平滑上升，不跳变
+  spillVisual += ((broken ? 1 : 0) - spillVisual) * 0.085;
   const rest = 0;
   for (let i = 0; i < N; i++) {
     const left = wave[i - 1] ?? wave[i], right = wave[i + 1] ?? wave[i];
@@ -311,7 +337,9 @@ function drawBall() {
   bctx.fillStyle = "rgba(255,255,255,.5)";
   for (let i = 0; i < 8; i++) {
     const bx = cx + Math.sin(performance.now() / 900 + i * 2.1) * R * .6;
-    const by = H - ((performance.now() / 14 + i * 97) % (H - levelY)) - levelY * 0 + levelY;
+    const depth = Math.max(0, cy + R - levelY);
+    if (depth < 8) continue;
+    const by = levelY + depth - ((performance.now() / 14 + i * 97) % depth);
     if (by > levelY + 6) { bctx.beginPath(); bctx.arc(bx, by, 3 + (i % 3), 0, Math.PI * 2); bctx.fill(); }
   }
   // 高光
@@ -328,12 +356,13 @@ function drawBall() {
 function drawPuddle() {
   const cv = $("puddle"), ctx = cv.getContext("2d");
   const W = cv.width, H = cv.height; ctx.clearRect(0, 0, W, H);
-  if (!broken) return;
+  if (spillVisual < 0.005) return;
   const excess = Math.max(0, dayTotal(viewDate) - state.settings.goal);
   const head = clamp(excess / state.settings.goal, 0, 1);
-  const flow = Math.sqrt(head); // Torricelli
+  const flow = Math.sqrt(head) * spillVisual; // 破裂 / 愈合都有平滑过渡
   const t = performance.now() / 1000;
   // 沿球面流下的水线（方向随倾斜偏移）
+  ctx.globalAlpha = spillVisual;
   ctx.strokeStyle = "rgba(30,111,217,.55)"; ctx.lineWidth = 2 + flow * 7; ctx.lineCap = "round";
   ctx.beginPath();
   const tx = effTiltX();
@@ -347,8 +376,20 @@ function drawPuddle() {
   ctx.beginPath(); ctx.ellipse(W / 2 + tx * 90, H - 12, pw / 2, 12 + Math.sin(t * 2) * 2, 0, 0, Math.PI * 2); ctx.fill();
   ctx.strokeStyle = "rgba(30,111,217,.35)"; ctx.lineWidth = 1.5;
   ctx.beginPath(); ctx.ellipse(W / 2 + tx * 90, H - 12, pw / 2 * (0.6 + 0.2 * Math.sin(t * 2.4)), 8, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.globalAlpha = 1;
 }
-function loop() { stepWave(); drawBall(); requestAnimationFrame(loop); }
+// 固定步长模拟，避免高刷新率屏幕出现波浪速度翻倍/跳帧。
+let previousFrame = 0, accumulator = 0;
+function loop(now) {
+  const elapsed = previousFrame ? Math.min(50, now - previousFrame) : 16.67;
+  previousFrame = now;
+  if (!document.hidden) {
+    accumulator = Math.min(50, accumulator + elapsed);
+    while (accumulator >= 16.67) { stepWave(); accumulator -= 16.67; }
+    drawBall();
+  } else accumulator = 0;
+  requestAnimationFrame(loop);
+}
 
 // ---------- 今日曲线（每杯，不累计，06:00–21:00） ----------
 function drawCurve() {
