@@ -624,6 +624,7 @@ function renderHist90() {
 let historyReturnFocus = null;
 function closeHistory() {
   $("historyOverlay").classList.remove("open");
+  $(".app").inert = false;
   document.body.style.overflow = "";
   if (historyReturnFocus?.isConnected) historyReturnFocus.focus();
   historyReturnFocus = null;
@@ -632,6 +633,7 @@ $("openHistory").addEventListener("click", () => {
   renderHist90();
   historyReturnFocus = document.activeElement;
   $("historyOverlay").classList.add("open");
+  $(".app").inert = true;
   document.body.style.overflow = "hidden";
   $("closeHistory").focus();
 });
