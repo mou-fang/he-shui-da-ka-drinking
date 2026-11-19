@@ -612,18 +612,36 @@ function renderHist90() {
   const el = $("hist90"); el.innerHTML = "";
   for (let i = 0; i < 90; i++) {
     const ds = addDays(todayStr(), -i), total = dayTotal(ds);
-    const row = document.createElement("div"); row.className = "hist90-row";
+    const row = document.createElement("button"); row.type = "button"; row.className = "hist90-row";
     row.innerHTML = `<span class="d">${ds}</span><span class="track"><span class="fill" style="display:block;width:${clamp(total / dayGoal(ds) * 100, 0, 100)}%"></span></span><span class="v">${total} ml</span>`;
     row.addEventListener("click", () => {
       switchDate(ds);
-      $("historyOverlay").classList.remove("open");
+      closeHistory();
     });
     el.appendChild(row);
   }
 }
-$("openHistory").addEventListener("click", () => { renderHist90(); $("historyOverlay").classList.add("open"); });
-$("closeHistory").addEventListener("click", () => $("historyOverlay").classList.remove("open"));
-$("historyOverlay").addEventListener("click", (e) => { if (e.target === $("historyOverlay")) $("historyOverlay").classList.remove("open"); });
+let historyReturnFocus = null;
+function closeHistory() {
+  $("historyOverlay").classList.remove("open");
+  document.body.style.overflow = "";
+  if (historyReturnFocus?.isConnected) historyReturnFocus.focus();
+  historyReturnFocus = null;
+}
+$("openHistory").addEventListener("click", () => {
+  renderHist90();
+  historyReturnFocus = document.activeElement;
+  $("historyOverlay").classList.add("open");
+  document.body.style.overflow = "hidden";
+  $("closeHistory").focus();
+});
+$("closeHistory").addEventListener("click", closeHistory);
+$("historyOverlay").addEventListener("click", e => {
+  if (e.target === $("historyOverlay")) closeHistory();
+});
+$("historyOverlay").addEventListener("keydown", e => {
+  if (e.key === "Escape") { e.preventDefault(); closeHistory(); }
+});
 function switchDate(date) {
   viewDate = date;
   // 保留上一天的可视水位，固定步长物理循环会把水面平滑过渡至新日期。
