@@ -71,3 +71,43 @@ test("入场滑块动画不能覆盖用户刚输入的毫升数", async ({ page 
   await page.waitForTimeout(350);
   await expect(page.locator("#amountNum")).toHaveText("750");
 });
+
+test("损坏 JSON 不应被第一次点击覆盖，仍可导出原始恢复文件", async ({page}) => {
+  await page.evaluate(() => localStorage.setItem("hsdq-v1","{bad json"));
+  await page.reload();
+  await page.locator("#extraBtn").click();
+  const stored = await page.evaluate(() => localStorage.getItem("hsdq-v1"));
+  expect(stored).toBe("{bad json");
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.locator("#exportData").click()
+  ]);
+  expect(download.suggestedFilename()).toContain("raw-recovery");
+});
+test("初次启动滑块动画不修改真实数值或输入框", async ({page}) => {
+  await expect(page.locator("#amountNum")).toHaveText("250");
+  await expect(page.locator("#amountInput")).toHaveValue("250");
+  await page.waitForTimeout(300);
+  await expect(page.locator("#amountNum")).toHaveText("250");
+  await expect(page.locator("#amountInput")).toHaveValue("250");
+});
+test("多个手机宽度下卡片不互相覆盖且页面没有水平溢出",async ({page}) => {
+  for (const width of [320,360,375,390,412,480]) {
+    await page.setViewportSize({width,height:850});
+    const positions = await page.evaluate(() => {
+      const hero = document.querySelector(".hero").getBoundingClientRect();
+      const amount = document.querySelector("#amountCard").getBoundingClientRect();
+      const action = document.querySelector("#actionRow").getBoundingClientRect();
+      return {
+        heroBottom: hero.bottom, amountTop: amount.top,
+        actionLeft: action.left, actionRight: action.right,
+        amountLeft: amount.left, amountRight: amount.right,
+        overflow:document.documentElement.scrollWidth-window.innerWidth
+      };
+    });
+    expect(positions.overflow).toBeLessThanOrEqual(2);
+    expect(positions.heroBottom).toBeLessThanOrEqual(positions.amountTop+2);
+    expect(positions.actionLeft).toBeGreaterThanOrEqual(positions.amountLeft);
+    expect(positions.actionRight).toBeLessThanOrEqual(positions.amountRight);
+  }
+});
