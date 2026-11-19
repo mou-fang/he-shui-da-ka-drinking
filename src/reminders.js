@@ -1,8 +1,7 @@
 import { Capacitor } from "@capacitor/core";
 import { LocalNotifications } from "@capacitor/local-notifications";
 import { clockStr, reminderTimes, todayStr } from "./core.js";
-
-const ANDROID_IDS = Array.from({ length: 24 }, (_, i) => ({ id: 7700 + i }));
+import { MANAGED_REMINDER_IDS, planAndroidReminders } from "./reminder-plan.js";
 let webTimer;
 let webSettings;
 let lastWebReminder = "";
@@ -41,27 +40,46 @@ async function syncWeb(settings, request) {
   return { ok: true };
 }
 async function syncAndroid(settings, request) {
-  const cancelExisting = async () => {
-    try { await LocalNotifications.cancel({ notifications: ANDROID_IDS }); } catch { /* 没有既存任务 */ }
+  // 先读取当前通知，再执行差量变更；禁止每次启动都无条件取消全部提醒。
+  const list = (await LocalNotifications.getPending()).notifications || [];
+  const managedIds = new Set(MANAGED_REMINDER_IDS.map(n => n.id));
+  const pending = list.filter(n => managedIds.has(n.id));
+  if (!settings.remindersEnabled) {
+    if (pending.length) await LocalNotifications.cancel({
+      notifications: pending.map(n => ({id:n.id}))
+    });
+    return {ok:true};
+  }
+  const permission = request
+    ? await LocalNotifications.requestPermissions()
+    : await LocalNotifications.checkPermissions();
+  if (permission.display !== "granted") return {
+    ok:false,message:"Android 通知权限未获得，请在系统设置中允许通知。"
   };
-  if (!settings.remindersEnabled) { await cancelExisting(); return { ok: true }; }
-  const permission = request ? await LocalNotifications.requestPermissions() : await LocalNotifications.checkPermissions();
-  if (permission.display !== "granted") return { ok: false, message: "Android 通知权限未获得，请在系统设置中允许通知。" };
-  const times = reminderTimes(settings);
-  // 固定 ID，调整时段时清理之前任务，不会重复推送。
-  await cancelExisting();
-  const notifications = times.map((time, index) => ({
-    id: ANDROID_IDS[index].id,
-    title: "喝水打卡 · 该喝水啦",
-    body: time + " 喝一杯水，记得打卡。",
-    schedule: { on: { hour: Number(time.slice(0, 2)), minute: 0 }, allowWhileIdle: false }
-  }));
-  if (notifications.length) await LocalNotifications.schedule({ notifications });
-  return { ok: true };
+  const plan = planAndroidReminders(settings, pending);
+  if (plan.schedule.length) {
+    // 先安排新通知，再清除旧时段。失败时至少保留未变更的已安排提醒。
+    await LocalNotifications.schedule({notifications:plan.schedule});
+  }
+  const after = (await LocalNotifications.getPending()).notifications || [];
+  const actual = new Set(after.map(n => n.id));
+  if (plan.expected.some(n => !actual.has(n.id))) {
+    return {ok:false,message:"系统未保存全部喝水提醒；已保留现有提醒，请重新打开设置重试。"};
+  }
+  if (plan.cancel.length) await LocalNotifications.cancel({notifications:plan.cancel});
+  return {ok:true};
 }
+// 启动恢复和用户点击可能几乎同时执行，串行化原生通知更新防止竞态。
+let androidSyncTail = Promise.resolve();
+function queueAndroidSync(settings, requestPermission) {
+  const job = androidSyncTail.catch(() => {}).then(() => syncAndroid(settings, requestPermission));
+  androidSyncTail = job;
+  return job;
+}
+
 export async function syncReminders(settings, requestPermission = false) {
   try {
-    if (reminderPlatform() === "android") return await syncAndroid(settings, requestPermission);
+    if (reminderPlatform() === "android") return await queueAndroidSync(settings, requestPermission);
     if (reminderPlatform() === "windows") {
       const response = await window.hsdq.setReminders({
         enabled: settings.remindersEnabled, times: reminderTimes(settings)
