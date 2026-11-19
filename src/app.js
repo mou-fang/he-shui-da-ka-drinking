@@ -2,7 +2,7 @@ import { eggForDate, HIDDEN_EGGS } from "./eggs.js";
 import {
   KEY, clamp, freshState, normalizeState, todayStr, addDays, clockStr, bounded,
   slotTimes as slotsFor, dayData as readDay, dayTotal as readTotal,
-  dayDrinks as readDrinks, nextOpenSlot as findOpen, ensureDay
+  dayDrinks as readDrinks, nextOpenSlot as findOpen, dayGoal as readGoal, ensureDay
 } from "./core.js";
 import { syncReminders, reminderDescription, reminderPlatform } from "./reminders.js";
 import { exportBackup } from "./backup.js";
@@ -41,6 +41,7 @@ let userTouchedAmount = false;
 function slotTimes() { return slotsFor(state.settings); }
 function dayData(date) { return readDay(state, date); }
 function dayTotal(date) { return readTotal(state, date); }
+function dayGoal(date) { return readGoal(state, date); }
 function dayDrinks(date) { return readDrinks(state, date); }
 function isToday() { return viewDate === todayStr(); }
 
@@ -50,7 +51,9 @@ function commit(change) {
   try {
     const next = JSON.parse(JSON.stringify(state));
     change(next);
-    localStorage.setItem(KEY, JSON.stringify(next));
+    const serialized = JSON.stringify(next);
+    localStorage.setItem(KEY, serialized);
+    if (localStorage.getItem(KEY) !== serialized) throw new Error("Storage write verification failed");
     state = next;
     return true;
   } catch (error) {
@@ -245,7 +248,7 @@ function afterChange(date, before) {
   animateNumber(after);
   renderAll();
   if (date === todayStr()) {
-    const goal = state.settings.goal;
+    const goal = dayGoal(date);
     if (before < goal && after >= goal && !state.celebrated[date]) {
       if (commit(next => { next.celebrated[date] = true; })) celebrate();
     }
@@ -332,7 +335,7 @@ function effTiltX() { return clamp(tiltX + windowTiltX, -1, 1); }
 let lastSplash = 0;
 
 function targetLevel() {
-  const t = dayTotal(viewDate) / state.settings.goal;
+  const t = dayTotal(viewDate) / dayGoal(viewDate);
   return clamp(t, 0, 1); // 超量时水面停在裂口高度，多余的水走溢流
 }
 function splash(strength = 1) {
@@ -403,8 +406,8 @@ function drawPuddle() {
   const cv = $("puddle"), ctx = cv.getContext("2d");
   const W = cv.width, H = cv.height; ctx.clearRect(0, 0, W, H);
   if (spillVisual < 0.005) return;
-  const excess = Math.max(0, dayTotal(viewDate) - state.settings.goal);
-  const head = clamp(excess / state.settings.goal, 0, 1);
+  const excess = Math.max(0, dayTotal(viewDate) - dayGoal(viewDate));
+  const head = clamp(excess / dayGoal(viewDate), 0, 1);
   const flow = Math.sqrt(head) * spillVisual; // 破裂 / 愈合都有平滑过渡
   const t = performance.now() / 1000;
   // 沿球面流下的水线（方向随倾斜偏移）
@@ -471,7 +474,7 @@ function drawCurve() {
 
 // ---------- 渲染 ----------
 function renderAll() {
-  const total = dayTotal(viewDate), goal = state.settings.goal;
+  const total = dayTotal(viewDate), goal = dayGoal(viewDate);
   $("goalLabel").textContent = `目标 ${goal} ml`;
   $("leftLabel").textContent = total >= goal ? `已超 ${total - goal} ml` : `还差 ${goal - total} ml`;
   if (!numberAnimating) $("totalNum").textContent = String(displayedTotal);
@@ -482,7 +485,7 @@ function renderAll() {
   // 日期标签与按钮状态
   const label = isToday() ? "今天" : viewDate === addDays(todayStr(), -1) ? "昨天" : viewDate;
   $("dateLabel").textContent = label;
-  $("nextDay").disabled = isToday();
+  $("nextDay").disabled = viewDate >= todayStr();
   const reached = total >= goal;
   $("checkinBtn").style.display = (reached || !isToday()) ? "none" : "";
   $("extraBtn").style.flex = (reached || !isToday()) ? "1" : "";
@@ -525,7 +528,7 @@ function renderAll() {
   let streak = 0;
   for (let i = 0; ; i++) {
     const ds = addDays(todayStr(), -i);
-    if (dayTotal(ds) >= goal) streak++; else break;
+    if (dayTotal(ds) >= dayGoal(ds)) streak++; else break;
   }
   $("streak").textContent = `连续达标 ${streak} 天`;
   drawCurve(); renderHist7();
@@ -536,7 +539,7 @@ function renderHist7() {
   const el = $("hist7"); el.innerHTML = "";
   for (let i = 6; i >= 0; i--) {
     const ds = addDays(todayStr(), -i), total = dayTotal(ds);
-    const pct = clamp(total / state.settings.goal, 0, 1);
+    const pct = clamp(total / dayGoal(ds), 0, 1);
     const col = document.createElement("div");
     col.className = "hist-bar" + (i === 0 ? " today" : "");
     col.innerHTML = `<div class="bar" style="height:${Math.max(4, pct * 82)}px"></div><div class="d">${ds.slice(5)}</div>`;
@@ -549,7 +552,7 @@ function renderHist90() {
   for (let i = 0; i < 90; i++) {
     const ds = addDays(todayStr(), -i), total = dayTotal(ds);
     const row = document.createElement("div"); row.className = "hist90-row";
-    row.innerHTML = `<span class="d">${ds}</span><span class="track"><span class="fill" style="display:block;width:${clamp(total / state.settings.goal * 100, 0, 100)}%"></span></span><span class="v">${total} ml</span>`;
+    row.innerHTML = `<span class="d">${ds}</span><span class="track"><span class="fill" style="display:block;width:${clamp(total / dayGoal(ds) * 100, 0, 100)}%"></span></span><span class="v">${total} ml</span>`;
     row.addEventListener("click", () => {
       switchDate(ds);
       $("historyOverlay").classList.remove("open");
@@ -567,7 +570,7 @@ function switchDate(date) {
   showNumber(dayTotal(viewDate)); renderAll();
 }
 $("prevDay").addEventListener("click", () => { syncDate(); switchDate(addDays(viewDate, -1)); });
-$("nextDay").addEventListener("click", () => { syncDate(); if (!isToday()) switchDate(addDays(viewDate, 1)); });
+$("nextDay").addEventListener("click", () => { syncDate(); if (viewDate < todayStr()) switchDate(addDays(viewDate, 1)); });
 
 // ---------- 设置 ----------
 function fillSettings() {
@@ -583,7 +586,10 @@ $("saveSettings").addEventListener("click", async () => {
     startHour: bounded($("setStart").value, state.settings.startHour, 0, 22),
     intervalHours: bounded($("setInterval").value, state.settings.intervalHours, 1, 4)
   };
-  if (!commit(next => Object.assign(next.settings, updated))) return;
+  if (!commit(next => {
+    Object.assign(next.settings, updated);
+    if (next.days[todayStr()]) next.days[todayStr()].goal = updated.goal;
+  })) return;
   setAmount(state.settings.defaultAmount, true); fillSettings(); renderAll();
   const result = await syncReminders(state.settings);
   toast(result.ok ? "设置已保存" : "设置已保存，但提醒更新失败：" + result.message);
@@ -591,7 +597,7 @@ $("saveSettings").addEventListener("click", async () => {
 $("clearToday").addEventListener("click", () => {
   if (!confirm("清空今天的全部打卡记录？此操作无法撤销，建议先导出备份。")) return;
   if (!commit(next => {
-    next.days[todayStr()] = { slots: {}, slotMeta: {}, bonus: [] };
+    next.days[todayStr()] = { goal: next.settings.goal, slots: {}, slotMeta: {}, bonus: [] };
     delete next.celebrated[todayStr()];
   })) return;
   showNumber(dayTotal(viewDate)); renderAll(); toast("今天已清空");
