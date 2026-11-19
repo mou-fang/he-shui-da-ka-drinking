@@ -79,8 +79,14 @@ jobs:
 
       # android/ 目录由 cap add 现场生成，仓库里只有 android/README.md
       # 一份说明，不提交原生工程（见 android/README.md）。
+      # 注意：仓库里已经有个 android/ 目录（只有 README.md），cap add
+      # 会报 "android platform already exists" 拒绝添加（第 2 次运行
+      # 就是这样失败的），所以先删掉这个占位目录再添加；删的只是
+      # 云端检出的一份副本，仓库里的 README.md 不受影响。
       - name: Add Android platform
-        run: npx cap add android
+        run: |
+          rm -rf android
+          npx cap add android
 
       - name: Sync web assets to Android
         run: npx cap sync android
