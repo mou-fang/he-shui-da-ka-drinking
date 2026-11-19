@@ -84,7 +84,8 @@ function createWindow() {
   win.setMenuBarVisibility(false);
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", event => event.preventDefault());
-  win.loadFile(path.join(__dirname, "..", "dist", "index.html"));
+  // 保持与 v1.0.0 相同的 file:// 页面路径，降低 Windows localStorage 升级迁移风险。
+  win.loadFile(path.join(__dirname, "..", "index.html"));
   win.on("close", e => {
     if (remindersEnabled && !quitting) { e.preventDefault(); win.hide(); }
   });
