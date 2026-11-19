@@ -1,3 +1,12 @@
+> **v1.1.0 说明**：此分支正在验证数据完整性、跨午夜、历史时段、动画过渡、Android/Windows/网页提醒，以及自动化安装包。正式版请以 CI 验证结果为准。
+
+**更新安全提示**：从旧版 CI 随机生成的 Android debug APK 换到正式签名 APK，通常不能直接覆盖升级。必须先备份饮水记录，然后再迁移。正式版 Android 签名密钥应保持稳定。
+
+**自动化**：每次 PR/main 运行 Quality Gate、Build Android APK、Build Windows Installer。Windows EXE 在 Actions Artifact 下载；推送 v* 标签后也上传 Releases。Android 正式包必须先配置仓库 Secrets：ANDROID_KEYSTORE_BASE64、ANDROID_KEYSTORE_PASSWORD、ANDROID_KEY_ALIAS、ANDROID_KEY_PASSWORD；缺少密钥只构建测试包，不发布不稳定签名的包。Windows 代码签名证书为可选配置（WINDOWS_CSC_LINK、WINDOWS_CSC_KEY_PASSWORD），未签名安装包会触发 SmartScreen 警告。
+
+**新功能**：所有本地记录支持 JSON 导出/导入；保存失败不会显示成功；新增记录实际时间；历史旧时段不会被新设置隐藏；跨午夜自动刷新。提醒默认关闭，点击按钮授权后启用。网页版需 HTTPS 或 localhost，且浏览器网页保持打开。
+
+---
 # 喝水打卡
 
 > **每天 2 升，一杯都不能少！**
@@ -35,7 +44,7 @@
 每 2 小时喝一杯 250 ml（08:00–20:00 共 7 个时段），在一颗大水球里
 实时看到今天喝了多少、还差多少。
 
-**项目定位**：一个零后端、零依赖、单机可用的开源小应用。
+**项目定位**：无需账号或后端，数据保存在本机。v1.1 使用 esbuild 打包共享前端、Capacitor 原生通知与 Electron 桌面壳。
 同一份网页代码有三种形态：
 
 | 形态 | 入口 | 数据存在哪 |
@@ -50,7 +59,7 @@
 
 ## 功能总览
 
-- 目标与时段：默认 2000 ml / 杯，7 个提醒时段，全部可在设置里改。
+- 目标与时段：默认每日 2000 ml / 每杯 250 ml、7 个提醒时段，全部可改。
 - 大水球：heightfield 波浪模拟，真实水面波动，不是 GIF、不是 CSS 假水。
 - 选水量：预设滑块（弹簧滑动）+ 直接输入 + ±50 ml 步进器（点按 / 长按连续）。
 - 打卡 / 额外加喝：双按钮并排，不用滑动就能点；达标后或看往日时只剩额外加喝。
@@ -158,24 +167,22 @@ CSS 尺寸手机约 253px、桌面约 317px，居中。
 ### 9. 提醒时段
 
 时段默认 08:00 / 10:00 / 12:00 / 14:00 / 16:00 / 18:00 / 20:00。
-**注意**：开源单机版只把时段当作打卡位，不发系统通知、不跑后台提醒——
-原版的定时提醒走 Muse 平台的 cron，单机版没有这条链路。
-想要提醒，请用手机 / 系统的日历或提醒事项按这 7 个时间点设，
-或按「扩展新功能」里的思路接 Notification API。
+**v1.1 提醒支持**：进入设置点击「开启系统提醒」，Android 使用本地系统通知（关闭 App 后仍由系统调度）；Windows 原生通知启用后驻留托盘并设置开机启动；浏览器版仅在网页仍打开时通知。系统权限、勿扰模式、省电优化及 Android 非精确闹钟策略可能导致延迟。关闭浏览器不会后台定时唤醒。
 
 ## 技术栈与目录结构
 
-**技术栈**：纯 HTML / CSS / JS（ES Module），零运行时依赖；
+**技术栈**：HTML / CSS / JS（ES Module，经 esbuild 打包），Capacitor 本地通知插件；
 Canvas 2D 手写水面物理；Electron（Windows）、Capacitor（Android）
 只做「把同一套网页装进壳里」，不改业务代码。
-Node ≥ 18（仓库在 Node 24 上验证过），`npm install` 瞬间完成，
-因为 `dependencies` 是空的。
+Node ≥ 22。推荐 `npm install --no-package-lock`，随后 `npm run build`。
 
 ```
 he-shui-da-qia/
 ├── index.html                  # 网页版入口：水球、选水量、时段、曲线、历史、设置
 ├── src/
-│   ├── app.js                  # 全部业务逻辑（见下）
+│   ├── app.js                  # UI 与 Canvas 交互
+│   ├── core.js                 # 数据校验、时段与统计规则
+│   ├── reminders.js            # 三端通知调度
 │   ├── eggs.js                 # 27 个彩蛋主题 + 日期哈希 + HIDDEN_EGGS 扩展点
 │   └── styles.css              # 全部样式（手机优先，max-width 480px 居中）
 ├── electron/
@@ -190,9 +197,8 @@ he-shui-da-qia/
 │   ├── build.mjs               # 构建：把网页版复制到 dist/
 │   ├── package-win.mjs         # Windows 打包入口：先检查平台与 electron-builder
 │   └── package-android.mjs     # Android 打包入口：先检查 JDK 与 Android SDK
-├── tests/
-│   └── window-motion.test.mjs  # 拖动换算单测（node --test），4 个用例
-├── assets/                     # 打包用资源位：放 electron-builder.yml 引用的 icon.ico
+├── tests/                     # 业务单测 + 窗口运动测试 + Playwright E2E
+├── assets/icon.ico             # Windows 安装与托盘图标
 ├── dist/                       # 构建产物（npm run build 生成，已忽略，不提交）
 ├── .gitignore
 ├── LICENSE                     # MIT
@@ -279,17 +285,17 @@ he-shui-da-qia/
 ## 本地运行
 
 ```bash
-npm install   # 零依赖，瞬间完成
-npm run dev   # http://localhost:5173
+npm install --no-package-lock   # 安装 Node 22 依赖
+npm run dev   # 先构建，再在 http://127.0.0.1:5173 启动本地服务
 npm run check # 语法检查（app.js / eggs.js / electron 三个 .cjs）
-npm test      # 拖动换算单测，4 个用例
-npm run build # 把网页版复制到 dist/（Electron / Capacitor 都用这份代码）
+npm test      # 核心数据与运动逻辑测试
+npm run test:e2e # 安装 Playwright Chromium 后进行桌面/手机视口交互测试
+npm run build # 打包 src/app.js 到 dist/app.js，三端共享
 ```
 
-也可以直接双击打开 `index.html`，但 ES Module 经 `file://` 打开时
-个别浏览器会拦，最稳的是 `npm run dev`。
+请通过 `npm run dev` 浏览打包后的页面；根目录 `index.html` 是模板，不再支持直接双击运行。
 
-**验证过的情况**（2026-11-19，Node 24.22.1 / npm 10.9.4）：
+**旧版 v1.0.0 的历史验证情况**（2026-11-19，Node 24.22.1 / npm 10.9.4）：
 `npm install`、`npm run check`、`npm test`（4/4 通过）、`npm run build` 全部通过；
 打卡算数 250 ml × 8 = 2000 ml 达标、额外加喝到 2250 ml 破裂、
 撤销回 2000 ml 玻璃长好、90 天历史 90 行，均已在逻辑层面核对。
@@ -329,12 +335,12 @@ npm run package:win     # 生成 NSIS 安装包，在 electron/dist/ 里
   Electron（内存只有约 500MB 可用，装 Electron + 打包风险大），
   所以 exe 需要在 Windows 电脑或 CI 上打。
 - 图标：`electron-builder.yml` 引用 `assets/icon.ico`，
-  发版前把图标放进 `assets/`（目前该目录是空的）。
+  已经提供 `assets/icon.ico`，无需额外准备图标。
 
 ## 打包 Android APK
 
 ```bash
-# 需要 JDK 17 + Android SDK（设好 ANDROID_HOME），装好后：
+# 需要 JDK 21 + Android SDK（设好 ANDROID_HOME），装好后：
 npm run setup:android   # 装 @capacitor/core + @capacitor/cli + @capacitor/android，生成 android/ 原生工程
 npm run package:android # 同步网页代码，打 debug APK
 # APK：android/app/build/outputs/apk/debug/app-debug.apk
@@ -343,7 +349,7 @@ npm run package:android # 同步网页代码，打 debug APK
 - `android/` 目录本身由 `npx cap add android` 生成，仓库里只有一份说明
   （`android/README.md`）；网页代码改完后跑 `npx cap sync android` 同步。
 - 推荐用 **GitHub Actions 云端打包**：推到 `main` 分支就会自动打 APK，
-  并更新到 Release `v1.0.0` 里（见 `.github/workflows/build-apk.yml`，
+  上传测试版 Artifact；仅 push v* tag 且配置 Android 固定签名 Secrets 时才发布正式 APK（见 `.github/workflows/build-apk.yml`，
   也可在 Actions 页面手动点 Run workflow）。本地沙箱禁 Java 进程的
   TCP 回环，Gradle 连不上自己的 daemon，本地打 APK 会失败，云端没有
   这个限制；本地脚手架与检查脚本（`scripts/package-android.mjs`，
@@ -385,7 +391,7 @@ npm run package:android # 同步网页代码，打 debug APK
 | 方面 | 原版 | 开源版 |
 | --- | --- | --- |
 | 数据 | 存在平台后端 | 只存在本机 localStorage，换设备 / 清数据就没了 |
-| 提醒 | 定时任务到点推送 | 只有时段打卡位，不发系统通知（见上节扩展思路） |
+| 提醒 | 定时任务到点推送 | Android 原生本地通知 / Windows 原生托盘通知 / 网页打开时的通知 |
 | 动画 | 平台构建器逐版迭代（v64） | 按 v64 复刻的重新实现，效果同等、不是逐像素复制 |
 | 破口水流 | 平台版的精确落点与碎片轨迹 | 同等效果的重新实现，落点可能略有不同 |
 | 彩蛋 | 27 主题 + 隐藏非饮品彩蛋 | 27 主题完整；隐藏彩蛋只留扩展点，未搬具体内容 |
