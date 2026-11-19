@@ -210,7 +210,7 @@ he-shui-da-qia/
 
 | 段 | 内容 |
 | --- | --- |
-| 存储 | `load` / `save`，localStorage 键 `hsdq-v1` |
+| 存储 | `load` / `commit`，localStorage 键 `hsdq-v1` |
 | 日期 / 时段 | `slotTimes`、`dayData`、`dayTotal`、`dayDrinks` |
 | 选水量 | 预设滑块、入场滑动、±50 步进器（长按连续）、直接输入 |
 | 打卡 | `checkinSlot`、`addBonus`、`removeBonus`、`afterChange`（达标 / 破裂触发点） |
@@ -229,6 +229,7 @@ he-shui-da-qia/
 ```jsonc
 {
   "settings": {
+    "remindersEnabled": false, // 是否开启系统提醒
     "goal": 2000,           // 每日目标 ml，默认 2000
     "defaultAmount": 250,   // 每杯默认 ml，默认 250
     "startHour": 8,         // 开始时间（时），默认 8
@@ -237,7 +238,9 @@ he-shui-da-qia/
   },
   "days": {
     "2026-11-19": {
-      "slots": { "08:00": 250, "10:00": 250 },   // 时段 -> 当杯 ml
+      "goal": 2000,       // 当日独立目标值，历史不会被今天改目标影响
+      "slots": { "08:00": 250, "10:00": 250 },
+      "slotMeta": { "08:00": { "time": "08:12" } }, // 实际饮水时间   // 时段 -> 当杯 ml
       "bonus": [                                  // 额外加喝
         { "id": "1731912345678abc12", "ml": 250, "time": "15:32" }
       ]
@@ -250,12 +253,10 @@ he-shui-da-qia/
 - **当天总量** = 该天 `slots` 毫升之和 + `bonus` 毫升之和。
   250 ml × 8 杯 = 2000 ml，刚好达标；7 个时段（1750 ml）+ 1 笔额外加喝
   （250 ml）也是 2000 ml。
-- **日期键**是本地时区的 `YYYY-MM-DD`。换设备、清浏览器数据，记录就没了——
-  这是单机版的取舍，不是 bug。
+- **日期键**是本地时区的 `YYYY-MM-DD`。记录仅保存在本机，换设备或卸载前必须先导出备份；本项目不保证系统自动备份能恢复数据。
 - **不存的东西**：没有任何用户身份、没有任何真实喝水记录随仓库发布；
   `celebrated` 只防重播，不含任何个人信息。
-- **损坏处理**：JSON 解析失败或结构不对时，`load()` 静默重建一份
-  默认空状态，不会白屏。
+- **损坏处理**：JSON 解析失败或记录结构损坏时进入只读恢复模式，禁止覆盖异常数据。可以导出原始恢复文件后手动修复，或导入已有的有效备份。
 
 ## 关键物理与动画参数
 
@@ -313,7 +314,7 @@ Windows 版是**竖版小弹窗**：默认 420×880，约手机竖屏比例，
 ```bash
 # 必须在 Windows 上跑：
 npm run setup:desktop   # 装 electron + electron-builder
-npm run package:win     # 生成 NSIS 安装包，在 electron/dist/ 里
+npm run package:win     # 生成 NSIS 安装包，在 out/windows/ 里
 ```
 
 - **拖窗口晃水的链路**（三段，缺一段就没效果）：
@@ -368,8 +369,7 @@ npm run package:android # 同步网页代码，打 debug APK
 - **加隐藏彩蛋**：往 `HIDDEN_EGGS` 里加
   `{ id, when(state, now), apply(theme) }`——`when` 返回 true 时触发。
   原版的隐藏彩蛋内容没有搬过来，别凭空编一个「就是原版那个」。
-- **改默认目标 / 每杯量**：改 `src/app.js` 里 `load()` 的默认
-  `settings`（goal / defaultAmount），再在设置卡里验证一遍；
+- **改默认目标 / 每杯量**：修改 `src/core.js` 的 `DEFAULT_SETTINGS`（goal / defaultAmount），再在设置卡和单测里验证；
   时段由 `startHour` + `intervalHours` 自动算出，不用手写 7 个时间。
 - **系统提醒**：Android 采用 Capacitor Local Notifications 原生调度；Windows 通过 Electron 主进程与托盘定时提醒；网页版 Notification API 必须保持页面打开。不同平台的系统省电、勿扰策略可能延迟通知。
 - **改水球手感**：只改「关键物理与动画参数」表里的那几个数，
@@ -428,3 +428,11 @@ Android 固定签名需保留原始 keystore（离线安全备份）及其密码
 Windows 安装包在 main 更新后自动上传到 Actions Artifacts；发布版本标签后上传 Releases。Windows 代码签名需要你自己的证书，否则安装时可能出现 SmartScreen 警告。
 
 **首次从老版 Android Debug APK 迁移到正式签名包时无法保证直接覆盖升级。**请先取出旧记录；新版提供原生分享/保存 JSON 备份功能，但老版没有。无备份前不要直接卸载旧 APK。
+
+
+### 第二轮审查后的提醒与 UI 可靠性说明
+
+- 预设时段按钮采用稳定 DOM 节点更新，打卡时保留键盘焦点并允许 CSS 背景渐变正常过渡；达标纸屑动画同一时刻只运行一个画布循环。
+- Android 设置/恢复通知时先补齐所需时段，确认安排成功后清理废弃时段；日历通知明确设置秒数为 0。启用省电休眠模式下的兼容提醒，但系统的勿扰、权限和厂商电池优化仍会影响最终送达时间。
+- 网页通知在浏览器定时器被延迟不超过约 3 分钟时尝试补发，且同一个站点的重复刷新不会重复提醒；彻底关闭网页后仍无法后台发送。
+- 全部日历和系统通知行为需要设备权限，自动化浏览器与构建 CI 并不等于完成了 Windows/Android 真机通知送达测试。
