@@ -2,7 +2,7 @@ import { eggForDate, HIDDEN_EGGS } from "./eggs.js";
 import {
   KEY, clamp, freshState, normalizeState, todayStr, addDays, clockStr, bounded,
   slotTimes as slotsFor, dayData as readDay, dayTotal as readTotal,
-  dayDrinks as readDrinks, nextOpenSlot as findOpen, dayGoal as readGoal, ensureDay
+  dayDrinks as readDrinks, nextOpenSlot as findOpen, dayGoal as readGoal, isLosslessRecordState, ensureDay
 } from "./core.js";
 import { syncReminders, reminderDescription, reminderPlatform } from "./reminders.js";
 import { exportBackup } from "./backup.js";
@@ -13,16 +13,19 @@ const $ = id => document.getElementById(id);
 let startupWarning = "";
 let loadError = false;
 let rawRecovery = "";
+let lastPersistedRaw = null;
 function load() {
   loadError = false;
   rawRecovery = "";
   try {
     const raw = localStorage.getItem(KEY);
+    lastPersistedRaw = raw;
     if (!raw) return freshState();
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) ||
         !parsed.settings || typeof parsed.settings !== "object" || Array.isArray(parsed.settings) ||
-        !parsed.days || typeof parsed.days !== "object" || Array.isArray(parsed.days)) {
+        !parsed.days || typeof parsed.days !== "object" || Array.isArray(parsed.days) ||
+        !isLosslessRecordState(parsed)) {
       throw new Error("Invalid data structure");
     }
     return normalizeState(parsed);
@@ -50,11 +53,21 @@ function isToday() { return viewDate === todayStr(); }
 function commit(change) {
   if (loadError) { toast("原始数据异常，为防丢失已禁止覆盖。请先导出原始恢复文件。"); return false; }
   try {
+    // 防止网页多标签页用过期状态直接覆盖另一标签页更新的记录。
+    // 这降低丢失风险，但 localStorage 没有跨进程原子 compare-and-swap。
+    if (localStorage.getItem(KEY) !== lastPersistedRaw) {
+      state = load();
+      showNumber(dayTotal(viewDate));
+      renderAll();
+      toast("另一窗口已修改记录，已同步最新内容，请重试");
+      return false;
+    }
     const next = JSON.parse(JSON.stringify(state));
     change(next);
     const serialized = JSON.stringify(next);
     localStorage.setItem(KEY, serialized);
     if (localStorage.getItem(KEY) !== serialized) throw new Error("Storage write verification failed");
+    lastPersistedRaw = serialized;
     state = next;
     return true;
   } catch (error) {
@@ -645,10 +658,13 @@ $("importFile").addEventListener("change", async e => {
     if (file.size > 10 * 1024 * 1024) throw new Error("文件超过 10MB");
     const backup = JSON.parse(await file.text());
     if (backup?.format !== "hsdq-backup-v1" || !backup.state?.settings || !backup.state?.days) throw new Error("备份结构或版本不匹配");
+    if (!isLosslessRecordState(backup.state)) throw new Error("备份存在格式损坏的记录，已拒绝导入以防丢失数据");
     const incoming = normalizeState(backup.state);
     const count = Object.keys(incoming.days).length;
     if (!confirm("将用备份中的 " + count + " 天记录和设置替换本机全部数据。建议先导出旧数据。确定导入吗？")) return;
-    localStorage.setItem(KEY, JSON.stringify(incoming));
+    const serialized = JSON.stringify(incoming);
+    localStorage.setItem(KEY, serialized);
+    lastPersistedRaw = serialized;
     state = incoming; loadError = false; rawRecovery = ""; startupWarning = "";
     lastToday = todayStr(); switchDate(lastToday);
     fillSettings(); setAmount(state.settings.defaultAmount);
