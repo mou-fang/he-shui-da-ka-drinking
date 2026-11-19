@@ -19,9 +19,6 @@ export function reminderDescription() {
   return "网页通知仅在网页保持打开时有效，关闭浏览器后无法后台提醒（需要系统允许通知）。";
 }
 function webTick() {
-  if (!webSettings?.remindersEnabled || document.visibilityState === "visible" && !document.hasFocus()) {
-    // 前台/后台均可提醒；仅以用户是否开启为准
-  }
   if (!webSettings?.remindersEnabled || typeof Notification === "undefined" || Notification.permission !== "granted") return;
   const now = new Date();
   const clock = clockStr(now);
