@@ -635,7 +635,10 @@ $("openHistory").addEventListener("click", () => {
   $("historyOverlay").classList.add("open");
   $(".app").inert = true;
   document.body.style.overflow = "hidden";
-  $("closeHistory").focus();
+  // Enter/Space 激活按钮时，浏览器可能在 click 默认动作结束后重设焦点。
+  requestAnimationFrame(() => {
+    if ($("historyOverlay").classList.contains("open")) $("closeHistory").focus({preventScroll:true});
+  });
 });
 $("closeHistory").addEventListener("click", closeHistory);
 $("historyOverlay").addEventListener("click", e => {
