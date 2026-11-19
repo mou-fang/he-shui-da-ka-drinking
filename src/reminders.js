@@ -20,12 +20,26 @@ export function reminderDescription() {
 function webTick() {
   if (!webSettings?.remindersEnabled || typeof Notification === "undefined" || Notification.permission !== "granted") return;
   const now = new Date();
-  const clock = clockStr(now);
-  if (!reminderTimes(webSettings).includes(clock)) return;
-  const key = todayStr(now) + " " + clock;
+  const nowMinute = now.getHours() * 60 + now.getMinutes();
+  // 后台浏览器可能延迟执行 timer，允许在时段开始的 3 分钟内补发，但不补发很久前的通知。
+  const due = reminderTimes(webSettings).filter(time => {
+    const [hour, minute] = time.split(":").map(Number);
+    const elapsed = nowMinute - (hour * 60 + minute);
+    return elapsed >= 0 && elapsed < 3;
+  }).at(-1);
+  if (!due) return;
+  const key = todayStr(now) + " " + due;
   if (lastWebReminder === key) return;
-  lastWebReminder = key;
-  try { new Notification("喝水打卡 · 该喝水啦", { body: clock + " 喝一杯水，记得回来打卡。" }); } catch { /* 浏览器可禁用通知 */ }
+  try {
+    if (localStorage.getItem("hsdq-last-web-reminder") === key) {
+      lastWebReminder = key; return;
+    }
+  } catch { /* 隐私模式可能禁止存储读取 */ }
+  try {
+    new Notification("喝水打卡 · 该喝水啦", { body: due + " 喝一杯水，记得回来打卡。" });
+    lastWebReminder = key;
+    try { localStorage.setItem("hsdq-last-web-reminder", key); } catch { /* 通知成功即可 */ }
+  } catch { /* 浏览器可禁用通知 */ }
 }
 async function syncWeb(settings, request) {
   clearInterval(webTimer);
