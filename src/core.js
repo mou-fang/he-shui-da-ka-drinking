@@ -118,16 +118,22 @@ export function reminderTimes(settings) { return slotTimes(settings); }
 export function isLosslessRecordState(value) {
   if (!record(value) || !record(value.settings) || !record(value.days)) return false;
   if (value.celebrated !== undefined && !record(value.celebrated)) return false;
+  if (Object.keys(value.days).length > 10000) return false;
   for (const [date, day] of Object.entries(value.days)) {
     if (!validDay(date) || !record(day) || !record(day.slots) || !Array.isArray(day.bonus)) return false;
     if (day.goal !== undefined && (!Number.isFinite(day.goal) || day.goal < 500 || day.goal > 5000)) return false;
+    if (day.bonus.length > 10000) return false;
     if (day.slotMeta !== undefined && !record(day.slotMeta)) return false;
+    if (record(day.slotMeta)) for (const [slot, meta] of Object.entries(day.slotMeta)) {
+      if (!slotPattern.test(slot) || !Object.hasOwn(day.slots, slot) ||
+          !record(meta) || typeof meta.time !== "string" || !timePattern.test(meta.time)) return false;
+    }
     for (const [time, ml] of Object.entries(day.slots)) {
-      if (!slotPattern.test(time) || !Number.isFinite(ml) || ml < 1 || ml > 100000) return false;
+      if (!slotPattern.test(time) || !Number.isInteger(ml) || ml < 1 || ml > 100000) return false;
     }
     for (const entry of day.bonus) {
       if (!record(entry) || typeof entry.id !== "string" || entry.id.length > 100 ||
-          !Number.isFinite(entry.ml) || entry.ml < 1 || entry.ml > 100000 ||
+          !Number.isInteger(entry.ml) || entry.ml < 1 || entry.ml > 100000 ||
           typeof entry.time !== "string" || !timePattern.test(entry.time)) return false;
     }
   }
