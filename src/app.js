@@ -428,7 +428,7 @@ function renderAll() {
   const total = dayTotal(viewDate), goal = state.settings.goal;
   $("goalLabel").textContent = `目标 ${goal} ml`;
   $("leftLabel").textContent = total >= goal ? `已超 ${total - goal} ml` : `还差 ${goal - total} ml`;
-  if (document.activeElement !== $("totalNum")) $("totalNum").textContent = displayedTotal;
+  if (!numberAnimating) $("totalNum").textContent = String(displayedTotal);
   const egg = eggTheme();
   $("eggNote").textContent = egg ? `今日饮品：${egg.name} — ${egg.note}` : "";
   // 隐藏彩蛋扩展点：按日期 / 时刻 / 动作触发的非饮品彩蛋在此挂接（原版内容不捏造）
@@ -447,10 +447,14 @@ function renderAll() {
   // 时段
   const d = dayData(viewDate);
   $("slots").innerHTML = "";
-  slotTimes().forEach(t => {
+  const configured = slotTimes();
+  [...new Set([...configured, ...Object.keys(d.slots)])].sort().forEach(t => {
     const b = document.createElement("button");
-    b.className = "slot press" + (t in d.slots ? " done" : ""); b.type = "button";
-    b.innerHTML = `<div class="t">${t}</div><div class="v">${t in d.slots ? d.slots[t] + " ml ✓" : "未喝"}</div>`;
+    b.className = "slot press" + (Object.hasOwn(d.slots, t) ? " done" : ""); b.type = "button";
+    const title = document.createElement("div"); title.className = "t"; title.textContent = t;
+    const value = document.createElement("div"); value.className = "v";
+    value.textContent = Object.hasOwn(d.slots,t) ? d.slots[t] + " ml ✓" + (configured.includes(t) ? "" : " · 旧时段") : "未喝";
+    b.append(title,value);
     b.addEventListener("click", () => {
       if (!isToday()) { toast("只能改今天的时段"); return; }
       checkinSlot(viewDate, t, selected);
@@ -461,9 +465,15 @@ function renderAll() {
   $("bonusList").innerHTML = "";
   d.bonus.forEach(b => {
     const li = document.createElement("li");
-    li.innerHTML = `<span>额外加喝 ${b.ml} ml · ${b.time}</span><button class="undo" data-undo="${b.id}">撤销</button>`;
-    $("bonusList").appendChild(li);
+    const description = document.createElement("span"); description.textContent = "额外加喝 " + b.ml + " ml · " + b.time;
+    const undo = document.createElement("button"); undo.className = "undo"; undo.dataset.undo = b.id; undo.textContent = "撤销";
+    li.append(description, undo); $("bonusList").appendChild(li);
   });
+  $("historyTimeRow").hidden = isToday();
+  if (!$("historyTime").value) $("historyTime").value = "12:00";
+  $("toggleReminders").textContent = state.settings.remindersEnabled ? "关闭系统提醒" : "开启系统提醒";
+  $("toggleReminders").setAttribute("aria-pressed", String(state.settings.remindersEnabled));
+  $("reminderStatus").textContent = (state.settings.remindersEnabled ? "已启用 · " : "未启用 · ") + reminderDescription();
   // 连续达标
   let streak = 0;
   for (let i = 0; ; i++) {
@@ -494,8 +504,8 @@ function renderHist90() {
     const row = document.createElement("div"); row.className = "hist90-row";
     row.innerHTML = `<span class="d">${ds}</span><span class="track"><span class="fill" style="display:block;width:${clamp(total / state.settings.goal * 100, 0, 100)}%"></span></span><span class="v">${total} ml</span>`;
     row.addEventListener("click", () => {
-      viewDate = ds; displayedTotal = dayTotal(ds); visualLevel = targetLevel();
-      $("historyOverlay").classList.remove("open"); renderAll();
+      switchDate(ds);
+      $("historyOverlay").classList.remove("open");
     });
     el.appendChild(row);
   }
@@ -503,8 +513,11 @@ function renderHist90() {
 $("openHistory").addEventListener("click", () => { renderHist90(); $("historyOverlay").classList.add("open"); });
 $("closeHistory").addEventListener("click", () => $("historyOverlay").classList.remove("open"));
 $("historyOverlay").addEventListener("click", (e) => { if (e.target === $("historyOverlay")) $("historyOverlay").classList.remove("open"); });
-$("prevDay").addEventListener("click", () => { viewDate = addDays(viewDate, -1); displayedTotal = dayTotal(viewDate); visualLevel = targetLevel(); renderAll(); });
-$("nextDay").addEventListener("click", () => { if (!isToday()) { viewDate = addDays(viewDate, 1); displayedTotal = dayTotal(viewDate); visualLevel = targetLevel(); renderAll(); } });
+function switchDate(date) {
+  viewDate = date; showNumber(dayTotal(viewDate)); visualLevel = targetLevel(); renderAll();
+}
+$("prevDay").addEventListener("click", () => { syncDate(); switchDate(addDays(viewDate, -1)); });
+$("nextDay").addEventListener("click", () => { syncDate(); if (!isToday()) switchDate(addDays(viewDate, 1)); });
 
 // ---------- 设置 ----------
 function fillSettings() {
@@ -513,20 +526,63 @@ function fillSettings() {
   $("setStart").value = state.settings.startHour;
   $("setInterval").value = state.settings.intervalHours;
 }
-$("saveSettings").addEventListener("click", () => {
-  state.settings.goal = clamp(+$("setGoal").value || 2000, 500, 5000);
-  state.settings.defaultAmount = clamp(+$("setAmount").value || 250, 10, 2000);
-  state.settings.startHour = clamp(+$("setStart").value || 8, 0, 22);
-  state.settings.intervalHours = clamp(+$("setInterval").value || 2, 1, 4);
-  save(); setAmount(state.settings.defaultAmount, true); fillSettings(); renderAll();
-  toast("设置已保存");
+$("saveSettings").addEventListener("click", async () => {
+  const updated = {
+    goal: bounded($("setGoal").value, state.settings.goal, 500, 5000, 50),
+    defaultAmount: bounded($("setAmount").value, state.settings.defaultAmount, 10, 2000, 10),
+    startHour: bounded($("setStart").value, state.settings.startHour, 0, 22),
+    intervalHours: bounded($("setInterval").value, state.settings.intervalHours, 1, 4)
+  };
+  if (!commit(next => Object.assign(next.settings, updated))) return;
+  setAmount(state.settings.defaultAmount, true); fillSettings(); renderAll();
+  const result = await syncReminders(state.settings);
+  toast(result.ok ? "设置已保存" : "设置已保存，但提醒更新失败：" + result.message);
 });
 $("clearToday").addEventListener("click", () => {
-  if (!confirm("清空今天的全部打卡记录？")) return;
-  state.days[todayStr()] = { slots: {}, bonus: [] };
-  delete state.celebrated[todayStr()];
-  displayedTotal = 0; visualLevel = 0; save(); renderAll(); toast("今天已清空");
+  if (!confirm("清空今天的全部打卡记录？此操作无法撤销，建议先导出备份。")) return;
+  if (!commit(next => {
+    next.days[todayStr()] = { slots: {}, slotMeta: {}, bonus: [] };
+    delete next.celebrated[todayStr()];
+  })) return;
+  showNumber(dayTotal(viewDate)); visualLevel = targetLevel(); renderAll(); toast("今天已清空");
 });
+$("toggleReminders").addEventListener("click", async () => {
+  const button = $("toggleReminders"); button.disabled = true;
+  const proposed = { ...state.settings, remindersEnabled: !state.settings.remindersEnabled };
+  const result = await syncReminders(proposed, proposed.remindersEnabled);
+  if (!result.ok) { toast(result.message); button.disabled = false; return; }
+  if (!commit(next => { next.settings.remindersEnabled = proposed.remindersEnabled; })) {
+    await syncReminders(state.settings); button.disabled = false; return;
+  }
+  button.disabled = false; renderAll();
+  toast(proposed.remindersEnabled ? "已开启系统提醒" : "已关闭系统提醒");
+});
+$("exportData").addEventListener("click", () => {
+  const payload = { format: "hsdq-backup-v1", exportedAt: new Date().toISOString(), state };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob); const link = document.createElement("a");
+  link.href = url; link.download = "he-shui-da-ka-" + todayStr() + ".json";
+  document.body.appendChild(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000); toast("备份文件已生成");
+});
+$("importData").addEventListener("click", () => $("importFile").click());
+$("importFile").addEventListener("change", async e => {
+  const file = e.target.files?.[0]; e.target.value = ""; if (!file) return;
+  try {
+    if (file.size > 10 * 1024 * 1024) throw new Error("文件超过 10MB");
+    const backup = JSON.parse(await file.text());
+    if (backup?.format !== "hsdq-backup-v1" || !backup.state?.settings || !backup.state?.days) throw new Error("备份结构或版本不匹配");
+    const incoming = normalizeState(backup.state);
+    const count = Object.keys(incoming.days).length;
+    if (!confirm("将用备份中的 " + count + " 天记录和设置替换本机全部数据。建议先导出旧数据。确定导入吗？")) return;
+    localStorage.setItem(KEY, JSON.stringify(incoming));
+    state = incoming; lastToday = todayStr(); switchDate(lastToday);
+    fillSettings(); setAmount(state.settings.defaultAmount);
+    const result = await syncReminders(state.settings);
+    toast(result.ok ? "备份导入成功" : "备份已导入，提醒同步失败：" + result.message);
+  } catch (error) { toast("导入失败：" + error.message); }
+});
+
 
 // ---------- 晃动 / 倾斜：deviceorientation + devicemotion ----------
 // iOS 需要用户手势授权，所以是个按钮；安卓 / 桌面直接监听。
@@ -576,16 +632,35 @@ window.addEventListener("pointermove", (e) => {
   if (!dragging) return;
   tiltX = clamp((e.clientX / innerWidth - .5) * 2, -1, 1);
 });
-window.addEventListener("pointerup", () => { dragging = false; tiltX = 0; });
+function endDrag() { dragging = false; tiltX = 0; }
+window.addEventListener("pointerup", endDrag);
+window.addEventListener("pointercancel", endDrag);
+window.addEventListener("blur", endDrag);
 window.addEventListener("resize", () => positionPill(false));
 
 // ---------- 启动 ----------
-// 无演示数据：第一次打开是空的，今天 0 ml。
 buildPresets();
 fillSettings();
 setAmount(state.settings.defaultAmount);
-displayedTotal = dayTotal(viewDate);
+showNumber(dayTotal(viewDate));
 visualLevel = targetLevel();
 renderAll();
-introSlider(); // 入场滑块从随机非 250 选项滑到 250
+introSlider();
+window.addEventListener("storage", e => {
+  if (e.key !== KEY) return;
+  state = load(); showNumber(dayTotal(viewDate)); visualLevel = targetLevel();
+  fillSettings(); renderAll(); void syncReminders(state.settings);
+});
+window.addEventListener("focus", syncDate);
+document.addEventListener("visibilitychange", () => {
+  previousFrame = 0; accumulator = 0;
+  if (!document.hidden) syncDate();
+});
+setInterval(syncDate, 30000);
+void syncReminders(state.settings).then(result => {
+  if (!result.ok && state.settings.remindersEnabled) toast(result.message);
+});
+if (startupWarning) toast(startupWarning);
+
+
 requestAnimationFrame(loop);
