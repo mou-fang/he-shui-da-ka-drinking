@@ -96,7 +96,7 @@ button:active{transform:scale(.97)}
 .overlay.open{display:block}
 .sheet{background:#fff;border-radius:20px;max-width:480px;margin:0 auto;padding:18px;animation:slideUp .25s ease}
 @keyframes slideUp{from{transform:translateY(16px);opacity:0}to{transform:none;opacity:1}}
-.hist90-row{display:flex;align-items:center;gap:10px;padding:9px 4px;border-bottom:1px solid var(--line);cursor:pointer}
+.hist90-row{display:flex;align-items:center;gap:10px;padding:9px 4px;border-bottom:1px solid var(--line);cursor:pointer;width:100%;text-align:left;background:transparent;font:inherit;border-radius:0}
 .hist90-row .d{width:86px;font-size:13px;flex:none}
 .hist90-row .track{flex:1;height:14px;background:#eef3fa;border-radius:999px;overflow:hidden}
 .hist90-row .fill{height:100%;background:var(--blue);border-radius:999px}
