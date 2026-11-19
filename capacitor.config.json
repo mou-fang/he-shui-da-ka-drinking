@@ -1,6 +1,6 @@
 {
   "android": {
-    "allowMixedContent": true
+    "allowMixedContent": false
   },
   "appId": "com.moufang.heshuidaqia",
   "appName": "喝水打卡",
