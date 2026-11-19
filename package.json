@@ -4,9 +4,9 @@
   "devDependencies": {
     "@capacitor/android": "8.6.2",
     "@capacitor/cli": "8.6.2",
-    "@playwright/test": "1.55.1",
-    "electron": "39.0.0",
-    "electron-builder": "26.0.12",
+    "@playwright/test": "1.65.1",
+    "electron": "45.4.1",
+    "electron-builder": "26.18.0",
     "esbuild": "0.25.12"
   },
   "license": "MIT",
