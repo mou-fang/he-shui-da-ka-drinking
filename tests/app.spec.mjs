@@ -1,6 +1,8 @@
 import { test, expect } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
+  // 固定本地 15:30，避免测试依赖 GitHub Runner 的实际时区/时刻。
+  await page.clock.setFixedTime(new Date("2026-11-19T07:30:00Z"));
   await page.goto("/");
   await page.evaluate(() => localStorage.clear());
   await page.reload();
@@ -157,4 +159,15 @@ test("系统减少动态效果时不生成额外碎片或纸屑", async ({page})
   await page.locator("#extraBtn").click();
   await expect(page.locator("#ballWrap")).toHaveClass(/broken/);
   await expect(page.locator(".shard")).toHaveCount(0);
+});
+
+test("跨过本地午夜重新聚焦自动切换日期且保留昨天记录", async ({ page }) => {
+  await page.locator("#extraBtn").click();
+  await expect(page.locator("#totalNum")).toHaveText("250");
+  await page.clock.setFixedTime(new Date("2026-11-19T16:01:00Z"));
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.locator("#dateLabel")).toHaveText("今天");
+  await expect(page.locator("#totalNum")).toHaveText("0");
+  await page.locator("#prevDay").click();
+  await expect(page.locator("#totalNum")).toHaveText("250");
 });
