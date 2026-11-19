@@ -35,6 +35,7 @@ test("达到目标后再喝超量触发破裂碎片，撤销后平滑恢复", as
   await page.emulateMedia({ reducedMotion:"reduce" });
   await page.locator("#amountInput").fill("1000");
   await page.locator("#amountInput").blur();
+  await expect(page.locator("#amountNum")).toHaveText("1000");
   await page.locator("#extraBtn").click();
   await page.locator("#extraBtn").click();
   await expect(page.locator("#leftLabel")).toHaveText("已超 0 ml");
@@ -62,4 +63,11 @@ test("移动端预设横向滑动不造成页面整体水平溢出", async ({ pa
   await expect(page.locator("#amountNum")).toHaveText("1000");
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(2);
+});
+
+test("入场滑块动画不能覆盖用户刚输入的毫升数", async ({ page }) => {
+  await page.locator("#amountInput").fill("750");
+  await expect(page.locator("#amountNum")).toHaveText("750");
+  await page.waitForTimeout(350);
+  await expect(page.locator("#amountNum")).toHaveText("750");
 });
