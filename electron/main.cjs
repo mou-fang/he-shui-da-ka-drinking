@@ -14,7 +14,7 @@ let lastReminderKey = "";
 let reminderTimer = null;
 
 function showWindow() {
-  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow(false);
   else { mainWindow.show(); mainWindow.focus(); }
 }
 function ensureTray() {
@@ -61,7 +61,7 @@ function updateReminders(input) {
     else if (tray) { tray.destroy(); tray = null; }
     if (!remindersEnabled && mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) showWindow();
     if (process.platform === "win32" && app.isPackaged) {
-      app.setLoginItemSettings({ openAtLogin: remindersEnabled });
+      app.setLoginItemSettings({ openAtLogin: remindersEnabled, args: remindersEnabled ? ["--background"] : [] });
     }
     return { ok: true };
   } catch (error) {
@@ -70,8 +70,9 @@ function updateReminders(input) {
 }
 ipcMain.handle("reminders:set", (_event, input) => updateReminders(input));
 
-function createWindow() {
+function createWindow(hidden = false) {
   const win = new BrowserWindow({
+    show: !hidden,
     width: 420, height: 880, minWidth: 360, minHeight: 700,
     resizable: true, useContentSize: true, title: "喝水打卡",
     backgroundColor: "#f4f8fd",
@@ -146,7 +147,9 @@ if (!ownsLock) {
   app.quit();
 } else {
   app.on("second-instance", showWindow);
-  app.whenReady().then(createWindow);
+  // 开机自启时静默加载以恢复系统提醒，避免桌面窗口闪现；手动启动保持正常显示。
+  const backgroundStart = process.platform === "win32" && process.argv.includes("--background");
+  app.whenReady().then(() => createWindow(backgroundStart));
 }
 app.on("before-quit", () => { quitting = true; });
 app.on("window-all-closed", () => {
