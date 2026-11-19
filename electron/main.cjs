@@ -112,7 +112,14 @@ function createWindow() {
   });
   win.on("closed", () => clearTimeout(settleTimer));
 }
-app.whenReady().then(createWindow);
+// 保证同一台电脑只有一个提醒调度器；防止开机启动与手动启动导致重复通知。
+const ownsLock = app.requestSingleInstanceLock();
+if (!ownsLock) {
+  app.quit();
+} else {
+  app.on("second-instance", showWindow);
+  app.whenReady().then(createWindow);
+}
 app.on("before-quit", () => { quitting = true; });
 app.on("window-all-closed", () => {
   if (!remindersEnabled && process.platform !== "darwin") app.quit();
