@@ -85,6 +85,33 @@ function createWindow() {
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", event => event.preventDefault());
   // 保持与 v1.0.0 相同的 file:// 页面路径，降低 Windows localStorage 升级迁移风险。
+  // 打包后的 Windows smoke test：启动真实 Electron、加载 UI 与 preload 后退出。
+  // CI 检查这一结果，避免「exe 打包成功但一运行就空白」。
+  if (process.argv.includes("--hsdq-smoke-test")) {
+    const watchdog = setTimeout(() => {
+      console.error("Smoke test timed out waiting for page load");
+      app.exit(3);
+    }, 20000);
+    win.webContents.once("did-finish-load", async () => {
+      try {
+        const ready = await win.webContents.executeJavaScript(
+          "Boolean(document.querySelector('#ball') && document.querySelector('#totalNum') && document.querySelector('#toggleReminders') && window.hsdq && typeof window.hsdq.setReminders === 'function')"
+        );
+        clearTimeout(watchdog);
+        if (!ready) console.error("Smoke test failed: UI elements or native preload bridge unavailable");
+        app.exit(ready ? 0 : 2);
+      } catch (error) {
+        clearTimeout(watchdog);
+        console.error("Smoke test renderer error", error);
+        app.exit(4);
+      }
+    });
+    win.webContents.once("did-fail-load", (_event, _code, description) => {
+      clearTimeout(watchdog);
+      console.error("Smoke test could not load UI:", description);
+      app.exit(5);
+    });
+  }
   win.loadFile(path.join(__dirname, "..", "index.html"));
   win.on("close", e => {
     if (remindersEnabled && !quitting) { e.preventDefault(); win.hide(); }
