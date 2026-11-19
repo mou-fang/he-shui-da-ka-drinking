@@ -1,1 +1,9 @@
-{"android":{"allowMixedContent":true},"appId":"com.moufang.heshuidaqia","appName":"喝水打卡","backgroundColor":"#f4f8fd","webDir":"."}
+{
+  "android": {
+    "allowMixedContent": true
+  },
+  "appId": "com.moufang.heshuidaqia",
+  "appName": "喝水打卡",
+  "backgroundColor": "#f4f8fd",
+  "webDir": "dist"
+}

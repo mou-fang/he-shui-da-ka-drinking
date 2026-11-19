@@ -335,16 +335,19 @@ npm run package:win     # 生成 NSIS 安装包，在 electron/dist/ 里
 
 ```bash
 # 需要 JDK 17 + Android SDK（设好 ANDROID_HOME），装好后：
-npm run setup:android   # 装 @capacitor/core + @capacitor/cli，生成 android/ 原生工程
+npm run setup:android   # 装 @capacitor/core + @capacitor/cli + @capacitor/android，生成 android/ 原生工程
 npm run package:android # 同步网页代码，打 debug APK
 # APK：android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
 - `android/` 目录本身由 `npx cap add android` 生成，仓库里只有一份说明
   （`android/README.md`）；网页代码改完后跑 `npx cap sync android` 同步。
-- 本机沙箱没有 Java、没有 Android SDK，所以 APK 没法在这里打出；
-  脚手架与检查脚本（`scripts/package-android.mjs`，缺 JDK / SDK 时会
-  明确报错、不会悄悄失败）已就绪，装好 SDK 就能打。
+- 推荐用 **GitHub Actions 云端打包**：推到 `main` 分支就会自动打 APK，
+  并更新到 Release `v1.0.0` 里（见 `.github/workflows/build-apk.yml`，
+  也可在 Actions 页面手动点 Run workflow）。本地沙箱禁 Java 进程的
+  TCP 回环，Gradle 连不上自己的 daemon，本地打 APK 会失败，云端没有
+  这个限制；本地脚手架与检查脚本（`scripts/package-android.mjs`，
+  缺 JDK / SDK 时会明确报错、不会悄悄失败）仍保留，给有本地 SDK 的人用。
 - Android 上「开启晃动」用的是系统的 `deviceorientation` /
   `devicemotion`，WebView 里一般直接可用，不像 iOS 需要点按钮授权。
 - 发正式版（release APK / AAB）时，记得在 `android/` 里配签名，
