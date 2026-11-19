@@ -19,7 +19,7 @@ function showWindow() {
 }
 function ensureTray() {
   if (tray) return;
-  const file = path.join(__dirname, "..", "assets", "icon.ico");
+  const file = app.isPackaged ? path.join(process.resourcesPath, "icon.ico") : path.join(__dirname, "..", "assets", "icon.ico");
   const icon = nativeImage.createFromPath(file);
   if (icon.isEmpty()) throw new Error("系统托盘图标加载失败");
   tray = new Tray(icon);
