@@ -273,7 +273,7 @@ he-shui-da-qia/
 | 碎片 | 14 片，约 1.6 秒不透明 + 约 1.6 秒淡出 | `spawnShards` |
 | 溢流流速 | Torricelli：`flow = sqrt(超量 / 目标)` | `drawPuddle` |
 | 水球尺寸 | 手机约 253px、桌面约 317px（CSS `clamp(253px, 68vw, 317px)`） | `src/styles.css` |
-| 曲线范围 | 06:00–21:00，纵轴 ≥500 ml | `drawCurve` |
+| 曲线范围 | 00:00–24:00，纵轴 ≥500 ml | `drawCurve` |
 | 彩蛋概率 | 彩蛋日约 60%，27 个主题各约 1–2% | `src/eggs.js`：`eggForDate` |
 | 入场滑块 | 约 120ms 内开始滑向 250 | `introSlider` |
 | 拖窗口 → 倾斜 | 500 px/s ≈ 满倾斜；加速度叠加 | `electron/window-motion.cjs`：`tiltFromMotion` |
@@ -371,11 +371,7 @@ npm run package:android # 同步网页代码，打 debug APK
 - **改默认目标 / 每杯量**：改 `src/app.js` 里 `load()` 的默认
   `settings`（goal / defaultAmount），再在设置卡里验证一遍；
   时段由 `startHour` + `intervalHours` 自动算出，不用手写 7 个时间。
-- **加系统提醒**：网页版目前没有通知能力。思路：用 Notification API
-  在时段点弹窗（需要用户授权，且页面要在前台或配 Service Worker），
-  或在 Electron 版里用主进程定时器 + `Notification`，
-  Android 版用 Capacitor Local Notifications 插件。
-  三个壳的能力不一样，别写一份代码指望三处都生效。
+- **系统提醒**：Android 采用 Capacitor Local Notifications 原生调度；Windows 通过 Electron 主进程与托盘定时提醒；网页版 Notification API 必须保持页面打开。不同平台的系统省电、勿扰策略可能延迟通知。
 - **改水球手感**：只改「关键物理与动画参数」表里的那几个数，
   先在网页版看效果。波浪三个系数（0.32 / 0.02 / 0.985）互相牵制，
   一次只动一个。
