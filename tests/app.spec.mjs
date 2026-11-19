@@ -1,11 +1,17 @@
 import { test, expect } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
+  // 自动拒绝被 UI 事件处理器吞掉的运行时未捕获异常，不再只依赖视觉断言。
+  page.__hsdqPageErrors = [];
+  page.on("pageerror", error => page.__hsdqPageErrors.push(error.message));
   // 固定本地 15:30，避免测试依赖 GitHub Runner 的实际时区/时刻。
   await page.clock.setFixedTime(new Date("2026-11-19T07:30:00Z"));
   await page.goto("/");
   await page.evaluate(() => localStorage.clear());
   await page.reload();
+});
+test.afterEach(async ({ page }) => {
+  expect(page.__hsdqPageErrors || [], "browser pageerror should be empty").toEqual([]);
 });
 test("空状态、打卡、撤销以及目标达成的状态一致", async ({ page }) => {
   await expect(page.locator("#totalNum")).toHaveText("0");
