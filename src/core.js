@@ -51,7 +51,7 @@ export function normalizeState(input) {
   if (record(input.days)) {
     for (const [date, source] of Object.entries(input.days).slice(-10000)) {
       if (!validDay(date) || !record(source)) continue;
-      const day = { slots: {}, slotMeta: {}, bonus: [] };
+      const day = { goal: bounded(source.goal, state.settings.goal, 500, 5000, 50), slots: {}, slotMeta: {}, bonus: [] };
       if (record(source.slots)) for (const [time, ml] of Object.entries(source.slots)) {
         if (!slotPattern.test(time) || !Number.isFinite(ml) || ml < 1 || ml > 100000) continue;
         day.slots[time] = Math.round(ml);
@@ -71,13 +71,15 @@ export function normalizeState(input) {
   return state;
 }
 export function ensureDay(state, date) {
-  if (!state.days[date]) state.days[date] = { slots: {}, slotMeta: {}, bonus: [] };
+  if (!state.days[date]) state.days[date] = { goal: state.settings.goal, slots: {}, slotMeta: {}, bonus: [] };
   if (!state.days[date].slotMeta) state.days[date].slotMeta = {};
+  if (!Number.isFinite(state.days[date].goal)) state.days[date].goal = state.settings.goal;
   return state.days[date];
 }
 export function dayData(state, date) {
-  return state.days[date] || { slots: {}, slotMeta: {}, bonus: [] };
+  return state.days[date] || { goal: state.settings.goal, slots: {}, slotMeta: {}, bonus: [] };
 }
+export function dayGoal(state, date) { return dayData(state, date).goal; }
 export function dayTotal(state, date) {
   const d = dayData(state, date);
   return Object.values(d.slots).reduce((sum, ml) => sum + ml, 0) + d.bonus.reduce((sum, b) => sum + b.ml, 0);
@@ -106,6 +108,6 @@ export function nextOpenSlot(state, date, now = new Date()) {
   const open = slotTimes(state.settings).filter(time => !Object.hasOwn(slots, time));
   if (!open.length) return null;
   const clock = clockStr(now);
-  return open.filter(time => time <= clock).at(-1) || open[0];
+  return open.filter(time => time <= clock).at(-1) || null;
 }
 export function reminderTimes(settings) { return slotTimes(settings); }
