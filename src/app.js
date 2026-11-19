@@ -10,12 +10,25 @@ import { exportBackup } from "./backup.js";
 const PRESETS = [100, 150, 200, 250, 300, 400, 500, 750, 1000];
 const $ = id => document.getElementById(id);
 let startupWarning = "";
+let loadError = false;
+let rawRecovery = "";
 function load() {
+  loadError = false;
+  rawRecovery = "";
   try {
     const raw = localStorage.getItem(KEY);
-    return raw ? normalizeState(JSON.parse(raw)) : freshState();
+    if (!raw) return freshState();
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) ||
+        !parsed.settings || typeof parsed.settings !== "object" || Array.isArray(parsed.settings) ||
+        !parsed.days || typeof parsed.days !== "object" || Array.isArray(parsed.days)) {
+      throw new Error("Invalid data structure");
+    }
+    return normalizeState(parsed);
   } catch {
-    startupWarning = "本地记录读取失败，尚未覆盖原始数据。请先检查或导出备份。";
+    loadError = true;
+    try { rawRecovery = localStorage.getItem(KEY) || ""; } catch { /* 浏览器可能拒绝存储访问 */ }
+    startupWarning = "本地记录读取异常，已暂停数据修改。请先导出原始恢复文件，再导入有效备份。";
     return freshState();
   }
 }
@@ -33,6 +46,7 @@ function isToday() { return viewDate === todayStr(); }
 
 // 先持久化候选状态，成功后才改变内存状态；配额满也不会假装打卡成功。
 function commit(change) {
+  if (loadError) { toast("原始数据异常，为防丢失已禁止覆盖。请先导出原始恢复文件。"); return false; }
   try {
     const next = JSON.parse(JSON.stringify(state));
     change(next);
@@ -576,9 +590,12 @@ $("exportData").addEventListener("click", async () => {
   const button = $("exportData");
   button.disabled = true;
   try {
-    const payload = { format: "hsdq-backup-v1", exportedAt: new Date().toISOString(), state };
-    await exportBackup(JSON.stringify(payload, null, 2), "he-shui-da-ka-" + todayStr() + ".json");
-    toast("请选择保存位置并保留备份文件");
+    const payload = loadError
+      ? { format: "hsdq-raw-recovery-v1", exportedAt: new Date().toISOString(), raw: rawRecovery }
+      : { format: "hsdq-backup-v1", exportedAt: new Date().toISOString(), state };
+    const name = loadError ? "he-shui-da-ka-raw-recovery-" : "he-shui-da-ka-";
+    await exportBackup(JSON.stringify(payload, null, 2), name + todayStr() + ".json");
+    toast(loadError ? "已导出原始恢复文件，请妥善保管" : "请选择保存位置并保留备份文件");
   } catch (error) {
     toast("导出失败：" + (error?.message || "请重试"));
   } finally {
@@ -596,7 +613,8 @@ $("importFile").addEventListener("change", async e => {
     const count = Object.keys(incoming.days).length;
     if (!confirm("将用备份中的 " + count + " 天记录和设置替换本机全部数据。建议先导出旧数据。确定导入吗？")) return;
     localStorage.setItem(KEY, JSON.stringify(incoming));
-    state = incoming; lastToday = todayStr(); switchDate(lastToday);
+    state = incoming; loadError = false; rawRecovery = ""; startupWarning = "";
+    lastToday = todayStr(); switchDate(lastToday);
     fillSettings(); setAmount(state.settings.defaultAmount);
     const result = await syncReminders(state.settings);
     toast(result.ok ? "备份导入成功" : "备份已导入，提醒同步失败：" + result.message);
