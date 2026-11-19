@@ -20,6 +20,14 @@ jobs:
         with:
           node-version: "22"
       - run: npm install --no-package-lock
+      - name: Generate dependency lockfile for reproducible builds
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Upload dependency lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-npm-lockfile
+          path: package-lock.json
+          if-no-files-found: error
       - run: npm run check
       - run: npm test
       - run: npm run build
