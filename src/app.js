@@ -144,7 +144,18 @@ holdable($("plusBtn"), () => setAmount(selected + 50, true));
 for (const [id, delta] of [["minusBtn", -50], ["plusBtn", 50]]) {
   $(id).addEventListener("click", e => { if (e.detail === 0) setAmount(selected + delta, true); });
 }
+// input 即时更新选择并阻止入场动画覆盖；change/blur 时才规范输入框数值。
+$("amountInput").addEventListener("input", e => {
+  userTouchedAmount = true;
+  const raw = e.target.value;
+  if (raw !== "" && Number.isFinite(Number(raw))) {
+    selected = bounded(raw, selected, 10, 2000, 10);
+    $("amountNum").textContent = String(selected);
+    positionPill(true);
+  }
+});
 $("amountInput").addEventListener("change", () => setAmount($("amountInput").value, true));
+$("amountInput").addEventListener("blur", () => setAmount($("amountInput").value, true));
 
 // ---------- 打卡 / 额外加喝 ----------
 function checkinSlot(date, time, ml) {
@@ -180,6 +191,7 @@ function removeBonus(date, id) {
   afterChange(date, before);
 }
 $("checkinBtn").addEventListener("click", () => {
+  userTouchedAmount = true;
   syncDate();
   if (!isToday()) { toast("只能给今天打卡，请切换到今天"); return; }
   const time = findOpen(state, viewDate);
@@ -187,6 +199,7 @@ $("checkinBtn").addEventListener("click", () => {
   if (checkinSlot(viewDate, time, selected)) toast(time + " 打卡 +" + selected + " ml");
 });
 $("extraBtn").addEventListener("click", () => {
+  userTouchedAmount = true;
   syncDate();
   if (addBonus(viewDate, selected)) toast("额外加喝 +" + selected + " ml");
 });
@@ -456,6 +469,7 @@ function renderAll() {
     value.textContent = Object.hasOwn(d.slots,t) ? d.slots[t] + " ml ✓" + (configured.includes(t) ? "" : " · 旧时段") : "未喝";
     b.append(title,value);
     b.addEventListener("click", () => {
+      userTouchedAmount = true;
       if (!isToday()) { toast("只能改今天的时段"); return; }
       checkinSlot(viewDate, t, selected);
     });
