@@ -456,25 +456,30 @@ function loop(now) {
   requestAnimationFrame(loop);
 }
 
-// ---------- 今日曲线（每杯，不累计，06:00–21:00） ----------
+// ---------- 每日完整 24 小时的饮水曲线（每杯，不累计） ----------
 function drawCurve() {
   const cv = $("curve"), ctx = cv.getContext("2d");
   const W = cv.width, H = cv.height; ctx.clearRect(0, 0, W, H);
-  const padL = 44, padR = 16, padT = 18, padB = 26;
+  const padL = 44, padR = 36, padT = 18, padB = 26;
   const x0 = padL, x1 = W - padR, y0 = padT, y1 = H - padB;
-  const maxMl = Math.max(500, ...dayDrinks(viewDate).map(d => d.ml));
-  const xFor = (mins) => x0 + ((mins - 360) / (21 * 60 - 360)) * (x1 - x0);
+  const drinks = dayDrinks(viewDate);
+  cv.setAttribute("role", "img");
+  cv.setAttribute("aria-label", drinks.length
+    ? `${viewDate} 共 ${drinks.length} 次饮水：${drinks.slice(0, 24).map(d => `${d.time} ${d.ml} 毫升`).join("；")}${drinks.length > 24 ? "等" : ""}`
+    : `${viewDate} 暂无饮水记录`);
+  const maxMl = Math.max(500, ...drinks.map(d => d.ml));
+  const xFor = mins => x0 + (mins / 1440) * (x1 - x0);
   const yFor = (ml) => y1 - (ml / maxMl) * (y1 - y0);
   ctx.strokeStyle = "#e3eaf2"; ctx.lineWidth = 1;
   [0, .5, 1].forEach(f => { ctx.beginPath(); ctx.moveTo(x0, y0 + (y1 - y0) * f); ctx.lineTo(x1, y0 + (y1 - y0) * f); ctx.stroke(); });
   ctx.fillStyle = "#6b7a90"; ctx.font = "22px sans-serif"; ctx.textAlign = "center";
-  ["06:00", "09:00", "12:00", "15:00", "18:00", "21:00"].forEach((t, i) => {
-    ctx.fillText(t, xFor(360 + i * 180), H - 4);
+  ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00", "24:00"].forEach((t, i) => {
+    ctx.fillText(t, xFor(i * 240), H - 4);
   });
-  const pts = dayDrinks(viewDate).map(d => {
-    const [h, m] = d.time.split(":").map(Number);
-    return { x: xFor(h * 60 + m), y: yFor(d.ml), ml: d.ml, inRange: h * 60 + m >= 360 && h * 60 + m <= 1260 };
-  }).filter(p => p.inRange);
+  const pts = drinks.map(d => {
+    const [hour, minute] = d.time.split(":").map(Number);
+    return { x: xFor(hour * 60 + minute), y: yFor(d.ml), ml: d.ml };
+  });
   if (pts.length) {
     ctx.strokeStyle = "#1e6fd9"; ctx.lineWidth = 3; ctx.beginPath();
     pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke();
@@ -484,7 +489,7 @@ function drawCurve() {
     });
   } else {
     ctx.fillStyle = "#6b7a90"; ctx.textAlign = "center";
-    ctx.fillText(isToday() ? "今天还没喝水，喝一杯就会出现在这里" : "这一天没有 06:00–21:00 的饮水记录", W / 2, H / 2);
+    ctx.fillText(isToday() ? "今天还没喝水，喝一杯就会出现在这里" : "这一天没有饮水记录", W / 2, H / 2);
   }
 }
 
