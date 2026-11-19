@@ -2,7 +2,7 @@
 
 **更新安全提示**：从旧版 CI 随机生成的 Android debug APK 换到正式签名 APK，通常不能直接覆盖升级。必须先备份饮水记录，然后再迁移。正式版 Android 签名密钥应保持稳定。
 
-**自动化**：每次 PR/main 运行 Quality Gate、Build Android APK、Build Windows Installer。Windows EXE 在 Actions Artifact 下载；推送 v* 标签后也上传 Releases。Android 正式包必须先配置仓库 Secrets：ANDROID_KEYSTORE_BASE64、ANDROID_KEYSTORE_PASSWORD、ANDROID_KEY_ALIAS、ANDROID_KEY_PASSWORD；缺少密钥只构建测试包，不发布不稳定签名的包。Windows 代码签名证书为可选配置（WINDOWS_CSC_LINK、WINDOWS_CSC_KEY_PASSWORD），未签名安装包会触发 SmartScreen 警告。
+**自动化**：Android `versionName/versionCode` 由 `package.json` 版本自动生成，防止覆盖升级时版本号不变。每次 PR/main 运行 Quality Gate、Build Android APK、Build Windows Installer。Windows EXE 在 Actions Artifact 下载；推送 v* 标签后也上传 Releases。Android 正式包必须先配置仓库 Secrets：ANDROID_KEYSTORE_BASE64、ANDROID_KEYSTORE_PASSWORD、ANDROID_KEY_ALIAS、ANDROID_KEY_PASSWORD；缺少密钥只构建测试包，不发布不稳定签名的包。Windows 代码签名证书为可选配置（WINDOWS_CSC_LINK、WINDOWS_CSC_KEY_PASSWORD），未签名安装包会触发 SmartScreen 警告。
 
 **新功能**：所有本地记录支持 JSON 导出/导入；保存失败不会显示成功；新增记录实际时间；历史旧时段不会被新设置隐藏；跨午夜自动刷新。提醒默认关闭，点击按钮授权后启用。网页版需 HTTPS 或 localhost，且浏览器网页保持打开。
 
@@ -423,3 +423,12 @@ npm run package:android # 同步网页代码，打 debug APK
 ## License
 
 MIT，见 [LICENSE](LICENSE)。
+
+
+### 安全签名与更新说明
+
+Android 固定签名需保留原始 keystore（离线安全备份）及其密码，在仓库 Settings → Secrets and variables → Actions 设置 `ANDROID_KEYSTORE_BASE64`（keystore 文件 Base64 内容）、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`。不得把这些值提交到代码中。只有推送 `v1.1.0` 等版本标签才发布签名 APK；普通 main / PR 仅上传测试构建 Artifact。
+
+Windows 安装包在 main 更新后自动上传到 Actions Artifacts；发布版本标签后上传 Releases。Windows 代码签名需要你自己的证书，否则安装时可能出现 SmartScreen 警告。
+
+**首次从老版 Android Debug APK 迁移到正式签名包时无法保证直接覆盖升级。**请先取出旧记录；新版提供原生分享/保存 JSON 备份功能，但老版没有。无备份前不要直接卸载旧 APK。

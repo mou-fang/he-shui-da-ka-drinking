@@ -11,5 +11,6 @@ if (!process.env.JAVA_HOME || !(process.env.ANDROID_HOME || process.env.ANDROID_
 const run = (exe,args,cwd) => execFileSync(exe,args,{ cwd, stdio:"inherit", shell:process.platform==="win32" });
 run("npm",["run","build"]);
 run("npx",["cap","sync","android"]);
+run("node",["scripts/sync-android-version.mjs"]);
 run(process.platform === "win32" ? "gradlew.bat" : "./gradlew",["assembleDebug"],"android");
 console.log("APK: android/app/build/outputs/apk/debug/app-debug.apk");
