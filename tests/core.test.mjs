@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  freshState, normalizeState, todayStr, addDays, bounded, slotTimes, dayTotal,
+  freshState, normalizeState, isLosslessRecordState, todayStr, addDays, bounded, slotTimes, dayTotal,
   dayDrinks, dayGoal, ensureDay, nextOpenSlot, reminderTimes
 } from "../src/core.js";
 
@@ -75,4 +75,17 @@ test("首个时段之前自动打卡不应提前抢占未来时段", () => {
   const state=freshState();
   assert.equal(nextOpenSlot(state,"2026-11-19",new Date(2026,10,19,7,59)),null);
   assert.equal(nextOpenSlot(state,"2026-11-19",new Date(2026,10,19,8,0)),"08:00");
+});
+
+test("记录包含畸形但可解析的 JSON 时拒绝静默丢弃任何饮水明细", () => {
+  const good = {settings:{goal:2000},days:{
+    "2026-11-19":{slots:{"08:00":250},bonus:[{id:"abc",ml:100,time:"12:30"}]}
+  }};
+  assert.equal(isLosslessRecordState(good),true);
+  const malformed=structuredClone(good);
+  malformed.days["2026-11-19"].bonus.push({id:"old",ml:"250",time:"12:40"});
+  assert.equal(isLosslessRecordState(malformed),false);
+  const invalidDate=structuredClone(good);
+  invalidDate.days["2026-02-30"]={slots:{"08:00":250},bonus:[]};
+  assert.equal(isLosslessRecordState(invalidDate),false);
 });
