@@ -474,7 +474,7 @@ function drawCurve() {
     });
   } else {
     ctx.fillStyle = "#6b7a90"; ctx.textAlign = "center";
-    ctx.fillText("今天还没喝水，喝一杯就会出现在这里", W / 2, H / 2);
+    ctx.fillText(isToday() ? "今天还没喝水，喝一杯就会出现在这里" : "这一天没有 06:00–21:00 的饮水记录", W / 2, H / 2);
   }
 }
 
@@ -491,6 +491,9 @@ function renderAll() {
   // 日期标签与按钮状态
   const label = isToday() ? "今天" : viewDate === addDays(todayStr(), -1) ? "昨天" : viewDate;
   $("dateLabel").textContent = label;
+  $("slotsTitle").textContent = isToday() ? "今天的时段" : viewDate + " 的时段";
+  $("curveTitle").textContent = isToday() ? "今日每杯曲线" : viewDate + " 每杯曲线";
+  $("slotsHint").textContent = isToday() ? "点一下已经开始的时段进行打卡，再点一次撤销。" : "历史时段不可更改，若需补记可使用额外加喝并选择饮水时间。";
   $("nextDay").disabled = viewDate >= todayStr();
   const reached = total >= goal;
   $("checkinBtn").style.display = (reached || !isToday()) ? "none" : "";
