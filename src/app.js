@@ -7,6 +7,7 @@ import {
 import { syncReminders, reminderDescription, reminderPlatform } from "./reminders.js";
 import { exportBackup } from "./backup.js";
 import { advanceWave } from "./wave.js";
+import { DEFAULT_WATER_COLORS, hexRgb, mixRgb, cssRgb } from "./palette.js";
 
 const PRESETS = [100, 150, 200, 250, 300, 400, 500, 750, 1000];
 const $ = id => document.getElementById(id);
@@ -278,10 +279,20 @@ function afterChange(date, before) {
 
 
 // ---------- 庆祝：五彩纸屑 110 片、3 波、约 6.5 秒 + 水球弹性缩放 ----------
+let activeConfettiFrame = 0;
+let confettiBurstVersion = 0;
+let activeSquashTimer = 0;
 function celebrate() {
   if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  $("ballWrap").classList.add("squash");
-  setTimeout(() => $("ballWrap").classList.remove("squash"), 700);
+  // 同一画布只能有一条纸屑 RAF 循环：短时间重复达标时取消上一轮。
+  const version = ++confettiBurstVersion;
+  cancelAnimationFrame(activeConfettiFrame);
+  const wrap = $("ballWrap");
+  clearTimeout(activeSquashTimer);
+  wrap.classList.remove("squash");
+  void wrap.offsetWidth; // 重新触发 CSS 动画，不让上次的 timeout 提前终止新一轮
+  wrap.classList.add("squash");
+  activeSquashTimer = setTimeout(() => wrap.classList.remove("squash"), 700);
   if (navigator.vibrate) navigator.vibrate([40, 40, 40]);
   const cv = $("confetti"), ctx = cv.getContext("2d");
   cv.width = innerWidth; cv.height = innerHeight;
@@ -294,17 +305,26 @@ function celebrate() {
         s: 5 + Math.random() * 7, r: Math.random() * Math.PI, vr: (Math.random() - .5) * .2,
         c: colors[(i + w) % colors.length], delay: w * 900 });
   const t0 = performance.now();
+  let lastConfettiT = t0;
   (function frame(now) {
-    const t = now - t0; ctx.clearRect(0, 0, cv.width, cv.height);
+    if (version !== confettiBurstVersion) return;
+    const t = now - t0;
+    // 以时间差积分，而非按帧累加：60/90/120Hz 下纸屑速度一致。
+    const dt = Math.min(3, Math.max(0, (now - lastConfettiT) / (1000 / 60)));
+    lastConfettiT = now;
+    ctx.clearRect(0, 0, cv.width, cv.height);
     let alive = false;
     for (const p of pieces) {
       if (t < p.delay) { alive = true; continue; }
-      p.x += p.vx + Math.sin(t / 300 + p.s) * .4; p.y += p.vy; p.r += p.vr;
+      p.x += (p.vx + Math.sin(t / 300 + p.s) * .4) * dt;
+      p.y += p.vy * dt;
+      p.r += p.vr * dt;
       if (p.y < cv.height + 20) alive = true;
       ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.r);
       ctx.fillStyle = p.c; ctx.fillRect(-p.s / 2, -p.s / 4, p.s, p.s / 2); ctx.restore();
     }
-    if (alive && t < 6500) requestAnimationFrame(frame); else ctx.clearRect(0, 0, cv.width, cv.height);
+    if (alive && t < 6500) activeConfettiFrame = requestAnimationFrame(frame);
+    else { activeConfettiFrame = 0; ctx.clearRect(0, 0, cv.width, cv.height); }
   })(t0);
 }
 
@@ -348,6 +368,24 @@ let wave = new Float32Array(N), vel = new Float32Array(N);
 const waveScratch = new Float32Array(N);
 let visualLevel = 0;      // 0..1，画面水位（平滑追赶真实水位）
 let spillVisual = 0;
+let paletteTop = hexRgb(DEFAULT_WATER_COLORS.top);
+let paletteDeep = hexRgb(DEFAULT_WATER_COLORS.deep);
+function targetPalette() {
+  const egg = eggTheme();
+  return egg ? {top:hexRgb(egg.top),deep:hexRgb(egg.deep)}
+    : {top:hexRgb(DEFAULT_WATER_COLORS.top),deep:hexRgb(DEFAULT_WATER_COLORS.deep)};
+}
+function snapPaletteToTheme() {
+  const target = targetPalette();
+  paletteTop = target.top;
+  paletteDeep = target.deep;
+}
+function stepPalette() {
+  const target = targetPalette();
+  const factor = matchMedia("(prefers-reduced-motion: reduce)").matches ? 1 : 0.1;
+  paletteTop = mixRgb(paletteTop,target.top,factor);
+  paletteDeep = mixRgb(paletteDeep,target.deep,factor);
+}
 let tiltX = 0, tiltY = 0; // 设备倾斜（-1..1）
 let shakeEnergy = 0;
 // Electron 桌面版：拖动窗口产生的等效倾斜（与设备倾斜叠加，停下后按帧衰减）。
@@ -368,6 +406,7 @@ function stepWave() {
   const target = targetLevel();
   visualLevel += (target - visualLevel) * 0.045; // 平滑上升，不跳变
   spillVisual += ((broken ? 1 : 0) - spillVisual) * 0.085;
+  stepPalette();
   // 使用上一帧采样快照积分，避免原位更新相邻点导致能量指数发散。
   if (performance.now() - lastWindowMotionT > 120) {
     windowTiltX *= 0.92;
@@ -381,8 +420,8 @@ function eggTheme() { return eggForDate(viewDate); }
 function drawBall() {
   const W = ballCv.width, H = ballCv.height, cx = W / 2, cy = H / 2, R = W / 2 - 6;
   bctx.clearRect(0, 0, W, H);
-  const theme = eggTheme();
-  const top = theme ? theme.top : "#bfe8ff", deep = theme ? theme.deep : "#1e6fd9";
+  // 球内主题色沿固定物理步长渐变，切换日期不会瞬时从一种颜色跳到另一种。
+  const top = cssRgb(paletteTop), deep = cssRgb(paletteDeep);
   // 玻璃球底
   bctx.save();
   bctx.beginPath(); bctx.arc(cx, cy, R, 0, Math.PI * 2); bctx.clip();
@@ -496,6 +535,7 @@ function drawCurve() {
 // ---------- 渲染 ----------
 function renderAll() {
   const total = dayTotal(viewDate), goal = dayGoal(viewDate);
+  $("appSubtitle").textContent = `每日目标 ${state.settings.goal} ml · 每 ${state.settings.intervalHours} 小时一个时段`;
   $("goalLabel").textContent = `目标 ${goal} ml`;
   $("leftLabel").textContent = total >= goal ? `已超 ${total - goal} ml` : `还差 ${goal - total} ml`;
   if (!numberAnimating) $("totalNum").textContent = String(displayedTotal);
@@ -517,27 +557,49 @@ function renderAll() {
   $("actionHint").textContent = (reached || !isToday())
     ? "已达标或查看历史时仍可额外加喝。"
     : "自动打卡仅占用已经到达的空时段。按默认时段合计 " + (slotTimes().length * state.settings.defaultAmount) + " ml；不够目标的部分可用额外加喝。";
-  // 时段
+  // 时段按钮按日期/时段复用，保持焦点与背景过渡，避免每次打卡闪白或丢键盘焦点。
   const d = dayData(viewDate);
-  $("slots").innerHTML = "";
+  const slotsHost = $("slots");
   const configured = slotTimes();
-  [...new Set([...configured, ...Object.keys(d.slots)])].sort().forEach(t => {
-    const b = document.createElement("button");
-    b.className = "slot press" + (Object.hasOwn(d.slots, t) ? " done" : ""); b.type = "button";
-    const title = document.createElement("div"); title.className = "t"; title.textContent = t;
-    const value = document.createElement("div"); value.className = "v";
-    value.textContent = Object.hasOwn(d.slots,t) ? d.slots[t] + " ml ✓" + (configured.includes(t) ? "" : " · 旧时段") : "未喝";
-    b.append(title,value);
-    b.addEventListener("click", () => {
-      userTouchedAmount = true;
-      if (!isToday()) { toast("只能改今天的时段"); return; }
-      if (!Object.hasOwn(dayData(viewDate).slots,t) && t > clockStr()) {
-        toast("该时段还未到；已经喝的水请使用额外加喝"); return;
-      }
-      checkinSlot(viewDate, t, selected);
-    });
-    $("slots").appendChild(b);
-  });
+  const activeTimes = [...new Set([...configured, ...Object.keys(d.slots)])].sort();
+  const existing = new Map([...slotsHost.children].map(button => [button.dataset.slotKey, button]));
+  const expected = new Set();
+  for (const [index, t] of activeTimes.entries()) {
+    const key = viewDate + "|" + t;
+    expected.add(key);
+    let button = existing.get(key);
+    if (!button) {
+      button = document.createElement("button");
+      button.type = "button";
+      button.dataset.slotKey = key;
+      button.className = "slot press";
+      const title = document.createElement("div"); title.className = "t"; title.textContent = t;
+      const value = document.createElement("div"); value.className = "v";
+      button.append(title, value);
+      const selectedDate = viewDate;
+      button.addEventListener("click", () => {
+        userTouchedAmount = true;
+        if (selectedDate !== viewDate || !isToday()) { toast("只能改今天的时段"); return; }
+        if (!Object.hasOwn(dayData(selectedDate).slots, t) && t > clockStr()) {
+          toast("该时段还未到；已经喝的水请使用额外加喝"); return;
+        }
+        checkinSlot(selectedDate, t, selected);
+      });
+    }
+    const completed = Object.hasOwn(d.slots, t);
+    button.classList.toggle("done", completed);
+    button.setAttribute("aria-pressed", String(completed));
+    button.querySelector(".v").textContent = completed
+      ? d.slots[t] + " ml ✓" + (configured.includes(t) ? "" : " · 旧时段")
+      : "未喝";
+    // 同一列表再次渲染时，不对原节点做 remove/insert，CSS transition 能连续运行。
+    if (slotsHost.children[index] !== button) {
+      slotsHost.insertBefore(button, slotsHost.children[index] || null);
+    }
+  }
+  for (const button of [...slotsHost.children]) {
+    if (!expected.has(button.dataset.slotKey)) button.remove();
+  }
   // 额外加喝列表 + 撤销
   $("bonusList").innerHTML = "";
   d.bonus.forEach(b => {
@@ -578,18 +640,41 @@ function renderHist90() {
   const el = $("hist90"); el.innerHTML = "";
   for (let i = 0; i < 90; i++) {
     const ds = addDays(todayStr(), -i), total = dayTotal(ds);
-    const row = document.createElement("div"); row.className = "hist90-row";
+    const row = document.createElement("button"); row.type = "button"; row.className = "hist90-row";
     row.innerHTML = `<span class="d">${ds}</span><span class="track"><span class="fill" style="display:block;width:${clamp(total / dayGoal(ds) * 100, 0, 100)}%"></span></span><span class="v">${total} ml</span>`;
     row.addEventListener("click", () => {
       switchDate(ds);
-      $("historyOverlay").classList.remove("open");
+      closeHistory();
     });
     el.appendChild(row);
   }
 }
-$("openHistory").addEventListener("click", () => { renderHist90(); $("historyOverlay").classList.add("open"); });
-$("closeHistory").addEventListener("click", () => $("historyOverlay").classList.remove("open"));
-$("historyOverlay").addEventListener("click", (e) => { if (e.target === $("historyOverlay")) $("historyOverlay").classList.remove("open"); });
+let historyReturnFocus = null;
+function closeHistory() {
+  $("historyOverlay").classList.remove("open");
+  document.querySelector(".app").inert = false;
+  document.body.style.overflow = "";
+  if (historyReturnFocus?.isConnected) historyReturnFocus.focus();
+  historyReturnFocus = null;
+}
+$("openHistory").addEventListener("click", () => {
+  renderHist90();
+  historyReturnFocus = document.activeElement;
+  $("historyOverlay").classList.add("open");
+  document.querySelector(".app").inert = true;
+  document.body.style.overflow = "hidden";
+  // Enter/Space 激活按钮时，浏览器可能在 click 默认动作结束后重设焦点。
+  requestAnimationFrame(() => {
+    if ($("historyOverlay").classList.contains("open")) $("closeHistory").focus({preventScroll:true});
+  });
+});
+$("closeHistory").addEventListener("click", closeHistory);
+$("historyOverlay").addEventListener("click", e => {
+  if (e.target === $("historyOverlay")) closeHistory();
+});
+$("historyOverlay").addEventListener("keydown", e => {
+  if (e.key === "Escape") { e.preventDefault(); closeHistory(); }
+});
 function switchDate(date) {
   viewDate = date;
   // 保留上一天的可视水位，固定步长物理循环会把水面平滑过渡至新日期。
@@ -746,6 +831,7 @@ fillSettings();
 setAmount(state.settings.defaultAmount);
 showNumber(dayTotal(viewDate));
 visualLevel = targetLevel();
+snapPaletteToTheme();
 renderAll();
 introSlider();
 window.addEventListener("storage", e => {

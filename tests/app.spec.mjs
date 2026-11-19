@@ -1,11 +1,17 @@
 import { test, expect } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
+  // 自动拒绝被 UI 事件处理器吞掉的运行时未捕获异常，不再只依赖视觉断言。
+  page.__hsdqPageErrors = [];
+  page.on("pageerror", error => page.__hsdqPageErrors.push(error.message));
   // 固定本地 15:30，避免测试依赖 GitHub Runner 的实际时区/时刻。
   await page.clock.setFixedTime(new Date("2026-11-19T07:30:00Z"));
   await page.goto("/");
   await page.evaluate(() => localStorage.clear());
   await page.reload();
+});
+test.afterEach(async ({ page }) => {
+  expect(page.__hsdqPageErrors || [], "browser pageerror should be empty").toEqual([]);
 });
 test("空状态、打卡、撤销以及目标达成的状态一致", async ({ page }) => {
   await expect(page.locator("#totalNum")).toHaveText("0");
@@ -256,4 +262,85 @@ test("JSON 备份导出与导入可恢复全部已记录的饮水量", async ({ 
   await page.locator("#importFile").setInputFiles(await download.path());
   await expect(page.locator("#totalNum")).toHaveText("250");
   await expect(page.locator("#leftLabel")).toHaveText("还差 1750 ml");
+});
+
+
+test("时段按钮点击前后保留同一个 DOM 节点与键盘焦点，颜色支持平滑过渡", async ({ page }) => {
+  const first = page.locator("#slots .slot").first();
+  await first.focus();
+  const before = await first.evaluate(node => { window.__slotBefore = node; return node.classList.contains("done"); });
+  expect(before).toBe(false);
+  await first.press("Enter");
+  await expect(first).toHaveClass(/done/);
+  expect(await first.evaluate(node => node === window.__slotBefore && document.activeElement === node)).toBe(true);
+  expect(await first.getAttribute("aria-pressed")).toBe("true");
+  await first.press("Enter");
+  await expect(first).not.toHaveClass(/done/);
+  expect(await first.evaluate(node => node === window.__slotBefore && document.activeElement === node)).toBe(true);
+});
+test("短时间再次达标不会被上次的定时器提前取消新水球弹性动画", async ({ page }) => {
+  await page.emulateMedia({reducedMotion:"no-preference"});
+  await page.locator("#setGoal").fill("500");
+  await page.locator("#saveSettings").click();
+  await page.locator("#amountInput").fill("500");
+  await page.locator("#amountInput").blur();
+  await page.locator("#extraBtn").click();
+  await expect(page.locator("#ballWrap")).toHaveClass(/squash/);
+  await page.waitForTimeout(300);
+  page.once("dialog", dialog => dialog.accept());
+  await page.locator("#clearToday").click();
+  await page.locator("#extraBtn").click();
+  await expect(page.locator("#ballWrap")).toHaveClass(/squash/);
+  await page.waitForTimeout(420);
+  await expect(page.locator("#ballWrap")).toHaveClass(/squash/);
+});
+
+
+test("90 天历史弹窗支持键盘浏览、Escape 关闭并恢复原有焦点", async ({ page }) => {
+  const opener = page.locator("#openHistory");
+  await opener.focus();
+  await opener.press("Enter");
+  await expect(page.locator("#historyOverlay")).toHaveClass(/open/);
+  await expect(page.locator("#closeHistory")).toBeFocused();
+  await expect(page.locator("#hist90")).toHaveCount(1);
+  await expect(page.locator(".hist90-row")).toHaveCount(90);
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#historyOverlay")).not.toHaveClass(/open/);
+  await expect(opener).toBeFocused();
+  await opener.press("Enter");
+  await page.locator(".hist90-row").nth(1).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#dateLabel")).toHaveText("昨天");
+  await expect(opener).toBeFocused();
+});
+
+
+test("网页提醒在浏览器计时器延迟两分钟内补发，刷新页面不会重复弹相同提醒", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__webReminders = [];
+    class FakeNotification {
+      constructor(title, options) { window.__webReminders.push({title, body:options.body}); }
+      static get permission() { return "granted"; }
+      static requestPermission() { return Promise.resolve("granted"); }
+    }
+    Object.defineProperty(window,"Notification",{configurable:true,value:FakeNotification});
+  });
+  // 中国本地 08:02 对应 UTC 00:02，允许定时器受后台节流时的短暂补发。
+  await page.clock.setFixedTime(new Date("2026-11-19T00:02:00Z"));
+  await page.reload();
+  await page.locator("#toggleReminders").click();
+  await expect.poll(() => page.evaluate(() => window.__webReminders.length)).toBe(1);
+  await expect(page.locator("#reminderStatus")).toContainText("已启用");
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => window.__webReminders.length)).toBe(0);
+});
+
+
+test("更改目标和间隔后页眉文字即时更新，不残留写死的 2 升/2 小时", async ({page}) => {
+  await page.locator("#setGoal").fill("3000");
+  await page.locator("#setInterval").fill("3");
+  await page.locator("#saveSettings").click();
+  await expect(page.locator("#appSubtitle")).toHaveText("每日目标 3000 ml · 每 3 小时一个时段");
+  await page.reload();
+  await expect(page.locator("#appSubtitle")).toHaveText("每日目标 3000 ml · 每 3 小时一个时段");
 });

@@ -12,7 +12,7 @@
   <header>
     <div>
       <h1>喝水打卡</h1>
-      <p class="sub">每天 2 升，每 2 小时一杯，慢慢喝完它。</p>
+      <p class="sub" id="appSubtitle">默认每日 2000 ml，每 2 小时一个打卡时段。</p>
     </div>
     <span class="streak" id="streak">连续达标 0 天</span>
   </header>
@@ -105,7 +105,7 @@
   <footer>喝水打卡 · 开源版（MIT）<br>水球里的水只存在你的设备上。</footer>
 </div>
 
-<div class="overlay" id="historyOverlay" role="dialog" aria-label="90 天历史">
+<div class="overlay" id="historyOverlay" role="dialog" aria-modal="true" aria-label="90 天历史">
   <div class="sheet">
     <div class="row space"><h2 style="margin:0">90 天历史</h2><button class="btn-ghost press" id="closeHistory">关闭</button></div>
     <p class="muted">点任意一行，跳到那天。</p>

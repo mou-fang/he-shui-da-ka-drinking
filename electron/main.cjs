@@ -2,6 +2,7 @@
 const { app, BrowserWindow, ipcMain, Notification, Tray, Menu, nativeImage } = require("electron");
 const path = require("node:path");
 const { computeMotion } = require("./window-motion.cjs");
+const { recentDueSlot } = require("./reminder-clock.cjs");
 const APP_ID = "com.moufang.heshuidaqia";
 if (process.platform === "win32") app.setAppUserModelId(APP_ID);
 
@@ -33,12 +34,12 @@ function ensureTray() {
 function tickReminders() {
   if (!remindersEnabled || !Notification.isSupported()) return;
   const now = new Date();
-  const clock = String(now.getHours()).padStart(2,"0") + ":" + String(now.getMinutes()).padStart(2,"0");
-  if (!reminderTimes.includes(clock)) return;
-  const key = [now.getFullYear(),now.getMonth(),now.getDate(),clock].join("-");
+  const due = recentDueSlot(reminderTimes,now);
+  if (!due) return;
+  const key = [now.getFullYear(),now.getMonth(),now.getDate(),due].join("-");
   if (lastReminderKey === key) return;
+  const note = new Notification({ title: "喝水打卡 · 该喝水啦", body: due + " 记得喝一杯水并打卡。" });
   lastReminderKey = key;
-  const note = new Notification({ title: "喝水打卡 · 该喝水啦", body: clock + " 记得喝一杯水并打卡。" });
   note.on("click", showWindow);
   note.show();
 }
