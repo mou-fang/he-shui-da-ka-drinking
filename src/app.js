@@ -142,7 +142,7 @@ function scrollPresetIntoView(button) {
   const left = button.offsetLeft - (track.clientWidth - button.offsetWidth) / 2;
   const max = Math.max(0, track.scrollWidth - track.clientWidth);
   const target = clamp(left, 0, max);
-  track.scrollTo({ left: target, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+  track.scrollTo({ left: target, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
 }
 // 入场只移动装饰性 pill，不能改真实 selected 或输入框，避免第一次输入跳值。
 function introSlider() {
@@ -561,7 +561,10 @@ $("openHistory").addEventListener("click", () => { renderHist90(); $("historyOve
 $("closeHistory").addEventListener("click", () => $("historyOverlay").classList.remove("open"));
 $("historyOverlay").addEventListener("click", (e) => { if (e.target === $("historyOverlay")) $("historyOverlay").classList.remove("open"); });
 function switchDate(date) {
-  viewDate = date; showNumber(dayTotal(viewDate)); visualLevel = targetLevel(); renderAll();
+  viewDate = date;
+  // 保留上一天的可视水位，固定步长物理循环会把水面平滑过渡至新日期。
+  // 此处不能同步重设 visualLevel，否则切换时会出现一帧瞬移。
+  showNumber(dayTotal(viewDate)); renderAll();
 }
 $("prevDay").addEventListener("click", () => { syncDate(); switchDate(addDays(viewDate, -1)); });
 $("nextDay").addEventListener("click", () => { syncDate(); if (!isToday()) switchDate(addDays(viewDate, 1)); });
@@ -591,7 +594,7 @@ $("clearToday").addEventListener("click", () => {
     next.days[todayStr()] = { slots: {}, slotMeta: {}, bonus: [] };
     delete next.celebrated[todayStr()];
   })) return;
-  showNumber(dayTotal(viewDate)); visualLevel = targetLevel(); renderAll(); toast("今天已清空");
+  showNumber(dayTotal(viewDate)); renderAll(); toast("今天已清空");
 });
 $("toggleReminders").addEventListener("click", async () => {
   const button = $("toggleReminders"); button.disabled = true;
@@ -704,7 +707,7 @@ renderAll();
 introSlider();
 window.addEventListener("storage", e => {
   if (e.key !== KEY) return;
-  state = load(); showNumber(dayTotal(viewDate)); visualLevel = targetLevel();
+  state = load(); showNumber(dayTotal(viewDate));
   fillSettings(); renderAll(); void syncReminders(state.settings);
 });
 window.addEventListener("focus", syncDate);
