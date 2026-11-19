@@ -17,7 +17,8 @@ export function planAndroidReminders(settings, pending = []) {
     const p=current.get(n.id);
     return !p || p.body!==n.body || p.title!==n.title ||
       p.schedule?.on?.hour !== n.schedule.on.hour ||
-      p.schedule?.on?.minute !== 0 || p.schedule?.on?.second !== 0;
+      p.schedule?.on?.minute !== 0 || p.schedule?.on?.second !== 0 ||
+      p.schedule?.allowWhileIdle !== n.schedule.allowWhileIdle;
   });
   const cancel = [...current.values()].filter(n=>!expectedIds.has(n.id)).map(n=>({id:n.id}));
   return {expected,schedule,cancel};
