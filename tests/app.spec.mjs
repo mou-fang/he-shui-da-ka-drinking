@@ -171,3 +171,13 @@ test("跨过本地午夜重新聚焦自动切换日期且保留昨天记录", as
   await page.locator("#prevDay").click();
   await expect(page.locator("#totalNum")).toHaveText("250");
 });
+
+test("历史日期标题与空曲线提示不再误写今天", async ({page}) => {
+  await page.locator("#prevDay").click();
+  await expect(page.locator("#slotsTitle")).toContainText("2026-11-18");
+  await expect(page.locator("#curveTitle")).toContainText("2026-11-18");
+  await expect(page.locator("#slotsHint")).toContainText("历史时段不可更改");
+  await page.locator("#nextDay").click();
+  await expect(page.locator("#slotsTitle")).toHaveText("今天的时段");
+  await expect(page.locator("#curveTitle")).toHaveText("今日每杯曲线");
+});
