@@ -5,6 +5,7 @@ import {
   dayDrinks as readDrinks, nextOpenSlot as findOpen, ensureDay
 } from "./core.js";
 import { syncReminders, reminderDescription, reminderPlatform } from "./reminders.js";
+import { exportBackup } from "./backup.js";
 
 const PRESETS = [100, 150, 200, 250, 300, 400, 500, 750, 1000];
 const $ = id => document.getElementById(id);
@@ -571,13 +572,18 @@ $("toggleReminders").addEventListener("click", async () => {
   button.disabled = false; renderAll();
   toast(proposed.remindersEnabled ? "已开启系统提醒" : "已关闭系统提醒");
 });
-$("exportData").addEventListener("click", () => {
-  const payload = { format: "hsdq-backup-v1", exportedAt: new Date().toISOString(), state };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob); const link = document.createElement("a");
-  link.href = url; link.download = "he-shui-da-ka-" + todayStr() + ".json";
-  document.body.appendChild(link); link.click(); link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 5000); toast("备份文件已生成");
+$("exportData").addEventListener("click", async () => {
+  const button = $("exportData");
+  button.disabled = true;
+  try {
+    const payload = { format: "hsdq-backup-v1", exportedAt: new Date().toISOString(), state };
+    await exportBackup(JSON.stringify(payload, null, 2), "he-shui-da-ka-" + todayStr() + ".json");
+    toast("请选择保存位置并保留备份文件");
+  } catch (error) {
+    toast("导出失败：" + (error?.message || "请重试"));
+  } finally {
+    button.disabled = false;
+  }
 });
 $("importData").addEventListener("click", () => $("importFile").click());
 $("importFile").addEventListener("change", async e => {
