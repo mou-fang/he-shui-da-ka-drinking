@@ -305,13 +305,20 @@ function celebrate() {
         s: 5 + Math.random() * 7, r: Math.random() * Math.PI, vr: (Math.random() - .5) * .2,
         c: colors[(i + w) % colors.length], delay: w * 900 });
   const t0 = performance.now();
+  let lastConfettiT = t0;
   (function frame(now) {
     if (version !== confettiBurstVersion) return;
-    const t = now - t0; ctx.clearRect(0, 0, cv.width, cv.height);
+    const t = now - t0;
+    // 以时间差积分，而非按帧累加：60/90/120Hz 下纸屑速度一致。
+    const dt = Math.min(3, Math.max(0, (now - lastConfettiT) / (1000 / 60)));
+    lastConfettiT = now;
+    ctx.clearRect(0, 0, cv.width, cv.height);
     let alive = false;
     for (const p of pieces) {
       if (t < p.delay) { alive = true; continue; }
-      p.x += p.vx + Math.sin(t / 300 + p.s) * .4; p.y += p.vy; p.r += p.vr;
+      p.x += (p.vx + Math.sin(t / 300 + p.s) * .4) * dt;
+      p.y += p.vy * dt;
+      p.r += p.vr * dt;
       if (p.y < cv.height + 20) alive = true;
       ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.r);
       ctx.fillStyle = p.c; ctx.fillRect(-p.s / 2, -p.s / 4, p.s, p.s / 2); ctx.restore();
