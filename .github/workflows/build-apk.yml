@@ -63,6 +63,12 @@ jobs:
           name: drinking-android-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+      # PR 也编译未签名 Release，用于验证正式打包链路，不公开分发这个包。
+      - name: Verify unsigned release packaging
+        working-directory: android
+        run: gradle assembleRelease --no-daemon --stacktrace
+      - name: Verify unsigned release output exists
+        run: test -f android/app/build/outputs/apk/release/app-release-unsigned.apk
       - name: Sign Android release if keys are configured
         if: startsWith(github.ref, 'refs/tags/v')
         env:
