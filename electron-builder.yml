@@ -8,6 +8,9 @@ extraResources:
 directories:
   output: out/windows
 files:
+  - index.html
+  - app.js
+  - src/styles.css
   - dist/**/*
   - assets/icon.ico
   - electron/**/*
