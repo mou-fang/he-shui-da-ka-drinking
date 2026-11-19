@@ -278,10 +278,20 @@ function afterChange(date, before) {
 
 
 // ---------- 庆祝：五彩纸屑 110 片、3 波、约 6.5 秒 + 水球弹性缩放 ----------
+let activeConfettiFrame = 0;
+let confettiBurstVersion = 0;
+let activeSquashTimer = 0;
 function celebrate() {
   if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  $("ballWrap").classList.add("squash");
-  setTimeout(() => $("ballWrap").classList.remove("squash"), 700);
+  // 同一画布只能有一条纸屑 RAF 循环：短时间重复达标时取消上一轮。
+  const version = ++confettiBurstVersion;
+  cancelAnimationFrame(activeConfettiFrame);
+  const wrap = $("ballWrap");
+  clearTimeout(activeSquashTimer);
+  wrap.classList.remove("squash");
+  void wrap.offsetWidth; // 重新触发 CSS 动画，不让上次的 timeout 提前终止新一轮
+  wrap.classList.add("squash");
+  activeSquashTimer = setTimeout(() => wrap.classList.remove("squash"), 700);
   if (navigator.vibrate) navigator.vibrate([40, 40, 40]);
   const cv = $("confetti"), ctx = cv.getContext("2d");
   cv.width = innerWidth; cv.height = innerHeight;
@@ -295,6 +305,7 @@ function celebrate() {
         c: colors[(i + w) % colors.length], delay: w * 900 });
   const t0 = performance.now();
   (function frame(now) {
+    if (version !== confettiBurstVersion) return;
     const t = now - t0; ctx.clearRect(0, 0, cv.width, cv.height);
     let alive = false;
     for (const p of pieces) {
@@ -304,7 +315,8 @@ function celebrate() {
       ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.r);
       ctx.fillStyle = p.c; ctx.fillRect(-p.s / 2, -p.s / 4, p.s, p.s / 2); ctx.restore();
     }
-    if (alive && t < 6500) requestAnimationFrame(frame); else ctx.clearRect(0, 0, cv.width, cv.height);
+    if (alive && t < 6500) activeConfettiFrame = requestAnimationFrame(frame);
+    else { activeConfettiFrame = 0; ctx.clearRect(0, 0, cv.width, cv.height); }
   })(t0);
 }
 
@@ -517,27 +529,49 @@ function renderAll() {
   $("actionHint").textContent = (reached || !isToday())
     ? "已达标或查看历史时仍可额外加喝。"
     : "自动打卡仅占用已经到达的空时段。按默认时段合计 " + (slotTimes().length * state.settings.defaultAmount) + " ml；不够目标的部分可用额外加喝。";
-  // 时段
+  // 时段按钮按日期/时段复用，保持焦点与背景过渡，避免每次打卡闪白或丢键盘焦点。
   const d = dayData(viewDate);
-  $("slots").innerHTML = "";
+  const slotsHost = $("slots");
   const configured = slotTimes();
-  [...new Set([...configured, ...Object.keys(d.slots)])].sort().forEach(t => {
-    const b = document.createElement("button");
-    b.className = "slot press" + (Object.hasOwn(d.slots, t) ? " done" : ""); b.type = "button";
-    const title = document.createElement("div"); title.className = "t"; title.textContent = t;
-    const value = document.createElement("div"); value.className = "v";
-    value.textContent = Object.hasOwn(d.slots,t) ? d.slots[t] + " ml ✓" + (configured.includes(t) ? "" : " · 旧时段") : "未喝";
-    b.append(title,value);
-    b.addEventListener("click", () => {
-      userTouchedAmount = true;
-      if (!isToday()) { toast("只能改今天的时段"); return; }
-      if (!Object.hasOwn(dayData(viewDate).slots,t) && t > clockStr()) {
-        toast("该时段还未到；已经喝的水请使用额外加喝"); return;
-      }
-      checkinSlot(viewDate, t, selected);
-    });
-    $("slots").appendChild(b);
-  });
+  const activeTimes = [...new Set([...configured, ...Object.keys(d.slots)])].sort();
+  const existing = new Map([...slotsHost.children].map(button => [button.dataset.slotKey, button]));
+  const expected = new Set();
+  for (const [index, t] of activeTimes.entries()) {
+    const key = viewDate + "|" + t;
+    expected.add(key);
+    let button = existing.get(key);
+    if (!button) {
+      button = document.createElement("button");
+      button.type = "button";
+      button.dataset.slotKey = key;
+      button.className = "slot press";
+      const title = document.createElement("div"); title.className = "t"; title.textContent = t;
+      const value = document.createElement("div"); value.className = "v";
+      button.append(title, value);
+      const selectedDate = viewDate;
+      button.addEventListener("click", () => {
+        userTouchedAmount = true;
+        if (selectedDate !== viewDate || !isToday()) { toast("只能改今天的时段"); return; }
+        if (!Object.hasOwn(dayData(selectedDate).slots, t) && t > clockStr()) {
+          toast("该时段还未到；已经喝的水请使用额外加喝"); return;
+        }
+        checkinSlot(selectedDate, t, selected);
+      });
+    }
+    const completed = Object.hasOwn(d.slots, t);
+    button.classList.toggle("done", completed);
+    button.setAttribute("aria-pressed", String(completed));
+    button.querySelector(".v").textContent = completed
+      ? d.slots[t] + " ml ✓" + (configured.includes(t) ? "" : " · 旧时段")
+      : "未喝";
+    // 同一列表再次渲染时，不对原节点做 remove/insert，CSS transition 能连续运行。
+    if (slotsHost.children[index] !== button) {
+      slotsHost.insertBefore(button, slotsHost.children[index] || null);
+    }
+  }
+  for (const button of [...slotsHost.children]) {
+    if (!expected.has(button.dataset.slotKey)) button.remove();
+  }
   // 额外加喝列表 + 撤销
   $("bonusList").innerHTML = "";
   d.bonus.forEach(b => {
