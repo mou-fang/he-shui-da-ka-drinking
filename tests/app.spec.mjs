@@ -123,6 +123,7 @@ test("切换历史日期时水球液面逐帧变化而非闪现", async ({page})
     return { red: rgba[0], green: rgba[1], blue: rgba[2] };
   });
   await expect.poll(async () => (await atCenter()).red, { timeout: 4000 }).toBeLessThan(200);
+  await page.waitForTimeout(1100); // 让水位真正接近满水，再检测切日期首帧
   await page.locator("#prevDay").click();
   await page.waitForTimeout(80);
   // 旧液位需逐步下降；不允许在切日期的第一帧直接清空水球。
