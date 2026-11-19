@@ -227,3 +227,33 @@ test("夜间 23:45 的饮水记录也显示在全天曲线中", async ({ page })
   await expect(page.locator(".axis-note")).toContainText("00:00–24:00");
   await expect(page.locator("#totalNum")).toHaveText("350");
 });
+
+
+test("存储空间失败不能把未保存的喝水量显示为成功", async ({ page }) => {
+  await page.evaluate(() => {
+    const original=Storage.prototype.setItem;
+    Storage.prototype.setItem=function(key, value) {
+      if (key==="hsdq-v1") throw new DOMException("Simulated quota failure", "QuotaExceededError");
+      return original.call(this,key,value);
+    };
+  });
+  await page.locator("#extraBtn").click();
+  await expect(page.locator("#totalNum")).toHaveText("0");
+  await expect(page.locator("#leftLabel")).toHaveText("还差 2000 ml");
+  await expect(page.locator("#toast")).toContainText("保存失败");
+});
+test("JSON 备份导出与导入可恢复全部已记录的饮水量", async ({ page }) => {
+  await page.locator("#extraBtn").click();
+  await expect(page.locator("#leftLabel")).toHaveText("还差 1750 ml");
+  const [download]=await Promise.all([
+    page.waitForEvent("download"),
+    page.locator("#exportData").click()
+  ]);
+  page.once("dialog",dialog => dialog.accept());
+  await page.locator("#clearToday").click();
+  await expect(page.locator("#totalNum")).toHaveText("0");
+  page.once("dialog",dialog => dialog.accept());
+  await page.locator("#importFile").setInputFiles(await download.path());
+  await expect(page.locator("#totalNum")).toHaveText("250");
+  await expect(page.locator("#leftLabel")).toHaveText("还差 1750 ml");
+});
