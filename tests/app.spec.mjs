@@ -307,3 +307,24 @@ test("90 天历史弹窗支持键盘浏览、Escape 关闭并恢复原有焦点"
   await expect(page.locator("#dateLabel")).toHaveText("昨天");
   await expect(opener).toBeFocused();
 });
+
+
+test("网页提醒在浏览器计时器延迟两分钟内补发，刷新页面不会重复弹相同提醒", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__webReminders = [];
+    class FakeNotification {
+      constructor(title, options) { window.__webReminders.push({title, body:options.body}); }
+      static get permission() { return "granted"; }
+      static requestPermission() { return Promise.resolve("granted"); }
+    }
+    Object.defineProperty(window,"Notification",{configurable:true,value:FakeNotification});
+  });
+  // 中国本地 08:02 对应 UTC 00:02，允许定时器受后台节流时的短暂补发。
+  await page.clock.setFixedTime(new Date("2026-11-19T00:02:00Z"));
+  await page.reload();
+  await page.locator("#toggleReminders").click();
+  await expect.poll(() => page.evaluate(() => window.__webReminders.length)).toBe(1);
+  await expect(page.locator("#reminderStatus")).toContainText("已启用");
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => window.__webReminders.length)).toBe(0);
+});
