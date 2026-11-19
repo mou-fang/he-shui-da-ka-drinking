@@ -41,3 +41,12 @@ test("不触碰应用之外的通知标识",()=>{
   assert.equal(p.cancel.length,0);
   assert.equal(MANAGED_REMINDER_IDS.length,24);
 });
+
+test("开启 Doze 送达能力时会更新此前关闭后台唤醒的旧计划",()=>{
+  const settings=freshState().settings;
+  const baseline=planAndroidReminders(settings,[]).expected;
+  const earlier=baseline.map(n=>({...n,schedule:{...n.schedule,allowWhileIdle:false}}));
+  const plan=planAndroidReminders(settings,earlier);
+  assert.equal(plan.schedule.length,baseline.length);
+  assert.ok(plan.schedule.every(n=>n.schedule.allowWhileIdle===true));
+});
