@@ -1,0 +1,12 @@
+node_modules/
+dist/
+out/
+.DS_Store
+*.log
+# Electron / Capacitor build outputs
+electron/dist/
+android/app/build/
+android/.gradle/
+android/local.properties
+# Local dev state (never commit real drinking data)
+.hsdq-dev-state.json

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>喝水打卡 — 每日 2 升</title>
+<link rel="stylesheet" href="src/styles.css">
+</head>
+<body>
+<canvas id="confetti"></canvas>
+<div class="app">
+  <header>
+    <div>
+      <h1>喝水打卡</h1>
+      <p class="sub">每天 2 升，每 2 小时一杯，慢慢喝完它。</p>
+    </div>
+    <span class="streak" id="streak">连续达标 0 天</span>
+  </header>
+
+  <div class="card hero">
+    <div class="date-nav">
+      <button class="btn-ghost press" id="prevDay" aria-label="前一天">‹</button>
+      <b id="dateLabel">今天</b>
+      <button class="btn-ghost press" id="nextDay" aria-label="后一天">›</button>
+    </div>
+    <div class="ball-wrap" id="ballWrap">
+      <canvas id="ball" width="640" height="640"></canvas>
+      <svg class="crack" viewBox="0 0 100 100" aria-hidden="true">
+        <path d="M50 2 L46 14 L54 20 L44 30 L52 38 L45 48" fill="none" stroke="#0b2a4a" stroke-width="1.6" stroke-linecap="round"/>
+        <path d="M50 2 L56 12 L48 22" fill="none" stroke="#0b2a4a" stroke-width="1" stroke-linecap="round"/>
+      </svg>
+      <div class="ball-text">
+        <div class="ball-total"><span id="totalNum">0</span><small> ml</small></div>
+        <div class="ball-goal" id="goalLabel">目标 2000 ml</div>
+        <div class="ball-left" id="leftLabel">还差 2000 ml</div>
+      </div>
+    </div>
+    <div class="egg-note" id="eggNote"></div>
+    <button class="shake-btn" id="shakeBtn">开启晃动</button>
+    <canvas id="puddle" width="960" height="128"></canvas>
+  </div>
+
+  <div class="card" id="amountCard">
+    <h2>这次喝了多少水</h2>
+    <div class="amount-display">
+      <button class="stepper press" id="minusBtn" aria-label="减少 50 毫升">−</button>
+      <div class="num"><span id="amountNum">250</span><small> ml</small></div>
+      <button class="stepper press" id="plusBtn" aria-label="增加 50 毫升">+</button>
+    </div>
+    <div class="preset-track" id="presetTrack">
+      <div class="preset-pill" id="presetPill"></div>
+    </div>
+    <input class="amount-input" id="amountInput" type="number" min="10" max="2000" step="10" value="250" inputmode="numeric" aria-label="直接输入毫升数">
+    <div class="action-row" id="actionRow">
+      <button class="btn btn-outline press" id="extraBtn">额外加喝</button>
+      <button class="btn btn-primary press" id="checkinBtn">到点打卡</button>
+    </div>
+    <p class="hint" id="actionHint">两个按钮都用上面选好的水量；到点打卡记到最近的未打卡时段。</p>
+    <ul class="bonus-list" id="bonusList"></ul>
+  </div>
+
+  <div class="card">
+    <h2>今天的时段</h2>
+    <div class="slots" id="slots"></div>
+    <p class="hint">点一下时段，用选好的水量打卡；再点一下撤销。</p>
+  </div>
+
+  <div class="card">
+    <h2>今日每杯曲线</h2>
+    <canvas id="curve" width="880" height="254"></canvas>
+    <p class="axis-note">06:00 – 21:00，每点是一杯的毫升数（不是累计）；这个时间段外的饮水计入总量，不画出来。</p>
+  </div>
+
+  <div class="card">
+    <div class="row space"><h2 style="margin:0">近期数据</h2><button class="btn-ghost press" id="openHistory">90 天 ›</button></div>
+    <div class="hist-bars" id="hist7"></div>
+    <p class="hint">最近 7 天紧凑预览，今天在最右。</p>
+  </div>
+
+  <div class="card">
+    <h2>设置</h2>
+    <div class="settings-grid">
+      <label>每日目标 (ml)<input id="setGoal" type="number" min="500" max="5000" step="50"></label>
+      <label>每杯默认 (ml)<input id="setAmount" type="number" min="10" max="2000" step="10"></label>
+      <label>开始时间（时）<input id="setStart" type="number" min="0" max="22" step="1"></label>
+      <label>间隔（小时）<input id="setInterval" type="number" min="1" max="4" step="1"></label>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn-ghost press" id="saveSettings">保存设置</button>
+      <button class="btn-ghost press" id="clearToday">清空今天</button>
+    </div>
+    <p class="hint">数据只存在这台设备的浏览器里（localStorage），不上传到任何地方。</p>
+  </div>
+
+  <footer>喝水打卡 · 开源版（MIT）<br>水球里的水只存在你的设备上。</footer>
+</div>
+
+<div class="overlay" id="historyOverlay" role="dialog" aria-label="90 天历史">
+  <div class="sheet">
+    <div class="row space"><h2 style="margin:0">90 天历史</h2><button class="btn-ghost press" id="closeHistory">关闭</button></div>
+    <p class="muted">点任意一行，跳到那天。</p>
+    <div id="hist90"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script type="module" src="src/app.js"></script>
+</body>
+</html>
