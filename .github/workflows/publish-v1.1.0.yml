@@ -39,24 +39,27 @@ jobs:
           fi
           WIN_ID=""
           APK_ID=""
+          QA_ID=""
           for attempt in $(seq 1 90); do
             RUNS="$(gh api "repos/$REPO/actions/runs?head_sha=$COMMIT_SHA&per_page=100")"
             WIN_ID="$(jq -r '[.workflow_runs[] | select(.name=="Build Windows Installer" and .head_branch=="main" and .event=="push" and .conclusion=="success")] | first | .id // empty' <<< "$RUNS")"
+            QA_ID="$(jq -r '[.workflow_runs[] | select(.name=="Quality Gate" and .head_branch=="main" and .event=="push" and .conclusion=="success")] | first | .id // empty' <<< "$RUNS")"
             APK_ID="$(jq -r '[.workflow_runs[] | select(.name=="Build Android APK" and .head_branch=="main" and .event=="push" and .conclusion=="success")] | first | .id // empty' <<< "$RUNS")"
             WIN_FAILED="$(jq -r '[.workflow_runs[] | select(.name=="Build Windows Installer" and .head_branch=="main" and .event=="push" and (.conclusion=="failure" or .conclusion=="cancelled"))] | length' <<< "$RUNS")"
+            QA_FAILED="$(jq -r '[.workflow_runs[] | select(.name=="Quality Gate" and .head_branch=="main" and .event=="push" and (.conclusion=="failure" or .conclusion=="cancelled"))] | length' <<< "$RUNS")"
             APK_FAILED="$(jq -r '[.workflow_runs[] | select(.name=="Build Android APK" and .head_branch=="main" and .event=="push" and (.conclusion=="failure" or .conclusion=="cancelled"))] | length' <<< "$RUNS")"
-            if [[ -n "$WIN_ID" && -n "$APK_ID" ]]; then
-              echo "Verified Windows run $WIN_ID and Android run $APK_ID for $COMMIT_SHA"
+            if [[ -n "$WIN_ID" && -n "$APK_ID" && -n "$QA_ID" ]]; then
+              echo "Verified Windows $WIN_ID, Android $APK_ID, Quality Gate $QA_ID for $COMMIT_SHA"
               break
             fi
-            if [[ "$WIN_FAILED" != "0" || "$APK_FAILED" != "0" ]]; then
+            if [[ "$WIN_FAILED" != "0" || "$APK_FAILED" != "0" || "$QA_FAILED" != "0" ]]; then
               echo "::error::One or more installer builds failed or were cancelled."
               exit 1
             fi
-            echo "Waiting for Windows and Android builds (attempt $attempt)"
+            echo "Waiting for Windows, Android and Quality Gate (attempt $attempt)"
             sleep 10
           done
-          if [[ -z "$WIN_ID" || -z "$APK_ID" ]]; then
+          if [[ -z "$WIN_ID" || -z "$APK_ID" || -z "$QA_ID" ]]; then
             echo "::error::Timed out waiting for both installer workflows."
             exit 1
           fi
