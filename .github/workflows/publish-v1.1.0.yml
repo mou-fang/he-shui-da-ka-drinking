@@ -31,6 +31,18 @@ jobs:
         run: |
           set -euo pipefail
           TAG="v1.1.0"
+          # Idempotence: if the tagged release already includes both installers and checksums,
+          # a workflow-only follow-up commit should not attempt to replace a tagged build.
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            ASSETS="$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name')"
+            if grep -qx "he-shui-da-ka-v1.1.0-windows-setup.exe" <<< "$ASSETS" &&
+               grep -qx "he-shui-da-ka-v1.1.0-android-debug.apk" <<< "$ASSETS" &&
+               grep -qx "checksums.txt" <<< "$ASSETS"; then
+              echo "Release $TAG and all three assets already exist; nothing to republish."
+              gh release view "$TAG" --repo "$REPO" --json url,tagName,assets,isPrerelease
+              exit 0
+            fi
+          fi
           # Never publish binaries from an out-of-date commit.
           CURRENT_MAIN="$(gh api "repos/$REPO/git/ref/heads/main" --jq '.object.sha')"
           if [[ "$COMMIT_SHA" != "$CURRENT_MAIN" ]]; then
@@ -110,4 +122,4 @@ jobs:
               --title "喝水打卡 v1.1.0 · Windows / Android" \
               --notes-file "$RUNNER_TEMP/release-notes.md" --latest
           fi
-          gh release view "$TAG" --repo "$REPO" --json url,tagName,assets,isLatest
+          gh release view "$TAG" --repo "$REPO" --json url,tagName,assets,isPrerelease
