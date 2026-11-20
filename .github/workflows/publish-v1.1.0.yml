@@ -1,0 +1,113 @@
+name: Publish v1.1.0 Windows and Android
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/publish-v1.1.0.yml
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: write
+concurrency:
+  group: publish-v1.1.0-installers
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node -p "require('./package.json').version")" = "1.1.0"
+      - name: Download verified Windows and Android artifacts, create release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          TAG="v1.1.0"
+          # Never publish binaries from an out-of-date commit.
+          CURRENT_MAIN="$(gh api "repos/$REPO/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$COMMIT_SHA" != "$CURRENT_MAIN" ]]; then
+            echo "::error::Main branch moved; refusing to publish stale installers."
+            exit 1
+          fi
+          WIN_ID=""
+          APK_ID=""
+          QA_ID=""
+          for attempt in $(seq 1 90); do
+            RUNS="$(gh api "repos/$REPO/actions/runs?head_sha=$COMMIT_SHA&per_page=100")"
+            WIN_ID="$(jq -r '[.workflow_runs[] | select(.name=="Build Windows Installer" and .head_branch=="main" and .event=="push" and .conclusion=="success")] | first | .id // empty' <<< "$RUNS")"
+            QA_ID="$(jq -r '[.workflow_runs[] | select(.name=="Quality Gate" and .head_branch=="main" and .event=="push" and .conclusion=="success")] | first | .id // empty' <<< "$RUNS")"
+            APK_ID="$(jq -r '[.workflow_runs[] | select(.name=="Build Android APK" and .head_branch=="main" and .event=="push" and .conclusion=="success")] | first | .id // empty' <<< "$RUNS")"
+            WIN_FAILED="$(jq -r '[.workflow_runs[] | select(.name=="Build Windows Installer" and .head_branch=="main" and .event=="push" and (.conclusion=="failure" or .conclusion=="cancelled"))] | length' <<< "$RUNS")"
+            QA_FAILED="$(jq -r '[.workflow_runs[] | select(.name=="Quality Gate" and .head_branch=="main" and .event=="push" and (.conclusion=="failure" or .conclusion=="cancelled"))] | length' <<< "$RUNS")"
+            APK_FAILED="$(jq -r '[.workflow_runs[] | select(.name=="Build Android APK" and .head_branch=="main" and .event=="push" and (.conclusion=="failure" or .conclusion=="cancelled"))] | length' <<< "$RUNS")"
+            if [[ -n "$WIN_ID" && -n "$APK_ID" && -n "$QA_ID" ]]; then
+              echo "Verified Windows $WIN_ID, Android $APK_ID, Quality Gate $QA_ID for $COMMIT_SHA"
+              break
+            fi
+            if [[ "$WIN_FAILED" != "0" || "$APK_FAILED" != "0" || "$QA_FAILED" != "0" ]]; then
+              echo "::error::One or more installer builds failed or were cancelled."
+              exit 1
+            fi
+            echo "Waiting for Windows, Android and Quality Gate (attempt $attempt)"
+            sleep 10
+          done
+          if [[ -z "$WIN_ID" || -z "$APK_ID" || -z "$QA_ID" ]]; then
+            echo "::error::Timed out waiting for both installer workflows."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/windows" "$RUNNER_TEMP/android" "$RUNNER_TEMP/dist"
+          gh run download "$WIN_ID" --repo "$REPO" --name drinking-windows-installer --dir "$RUNNER_TEMP/windows"
+          gh run download "$APK_ID" --repo "$REPO" --name drinking-android-debug --dir "$RUNNER_TEMP/android"
+          WIN_FILE="$(find "$RUNNER_TEMP/windows" -type f -name '*.exe' -print -quit)"
+          APK_FILE="$(find "$RUNNER_TEMP/android" -type f -name '*.apk' -print -quit)"
+          if [[ -z "$WIN_FILE" || -z "$APK_FILE" ]]; then
+            echo "::error::Expected Windows EXE or Android APK is missing."
+            exit 1
+          fi
+          test "$(stat -c '%s' "$WIN_FILE")" -gt 1000000
+          test "$(stat -c '%s' "$APK_FILE")" -gt 1000000
+          WIN_OUT="$RUNNER_TEMP/dist/he-shui-da-ka-$TAG-windows-setup.exe"
+          APK_OUT="$RUNNER_TEMP/dist/he-shui-da-ka-$TAG-android-debug.apk"
+          cp "$WIN_FILE" "$WIN_OUT"
+          cp "$APK_FILE" "$APK_OUT"
+          sha256sum "$WIN_OUT" "$APK_OUT" | tee "$RUNNER_TEMP/checksums.txt"
+          cat > "$RUNNER_TEMP/release-notes.md" <<'NOTES'
+          ## v1.1.0 · 喝水打卡
+          
+          本次版本包含第一轮及第二轮代码审查后的修复：数据恢复和备份、日期与时段、Windows/Android/网页提醒，以及水球和纸屑动画优化。
+          
+          ### Windows
+          - 下载 `he-shui-da-ka-v1.1.0-windows-setup.exe`，运行 NSIS 安装程序。
+          - 安装包已通过 Windows GitHub Actions 构建和启动检查。
+          - 未提供商业代码签名证书，Windows SmartScreen 可能显示未知发布者警告。
+          
+          ### Android — Debug 测试版
+          - 下载 `he-shui-da-ka-v1.1.0-android-debug.apk`。
+          - **这不是正式签名 Release APK。** 每次 CI 的 Debug 签名可能不同，不能保证覆盖安装以前的 v1.0.0 或其他 APK。
+          - 卸载 Android 应用会删除本地喝水记录。**没有独立备份的旧版数据时，不要为了升级而卸载旧应用。**
+          - 需要配置固定 Android Keystore 的 GitHub Secrets，才能发布可长期稳定升级的正式签名 APK。
+          
+          网页、Android 息屏提醒以及 Windows 托盘/休眠恢复的实际表现仍取决于设备权限和系统策略；GitHub Actions 通过不能代替设备实测。
+          NOTES
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            TAG_SHA="$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '.object.sha')"
+            if [[ "$TAG_SHA" != "$COMMIT_SHA" ]]; then
+              echo "::error::Existing $TAG points to another commit. Refusing to overwrite release."
+              exit 1
+            fi
+            gh release upload "$TAG" "$WIN_OUT" "$APK_OUT" "$RUNNER_TEMP/checksums.txt" --repo "$REPO" --clobber
+          else
+            gh release create "$TAG" "$WIN_OUT" "$APK_OUT" "$RUNNER_TEMP/checksums.txt" \
+              --repo "$REPO" --target "$COMMIT_SHA" \
+              --title "喝水打卡 v1.1.0 · Windows / Android" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" --latest
+          fi
+          gh release view "$TAG" --repo "$REPO" --json url,tagName,assets,isLatest
